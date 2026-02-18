@@ -163,6 +163,14 @@ void PatternClipView::copySelectionToNewPatternTrack()
 							if (newNotePosRelativeToClip < 0 || newNotePosRelativeToClip >= clipv->getClip()->length()) { continue; }
 
 							newNote.setPos(newNotePos);
+
+							// Truncate notes that extend beyond the clip boundary
+							TimePos clipEnd = clipv->getClip()->length();
+							if (newNotePosRelativeToClip + newNote.length() > clipEnd)
+							{
+								newNote.setLength(clipEnd - newNotePosRelativeToClip);
+							}
+
 							newMidiClip->addNote(newNote, false);
 							maxNotePos = std::max(maxNotePos, newNotePos);
 						}

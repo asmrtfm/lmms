@@ -194,8 +194,7 @@ void PatternTrack::loadTrackSpecificSettings(const QDomElement& _this)
 		{
 			Clip::copyStateTo(track->getClip(src), track->getClip(dst));
 		}
-		setName( tr( "Clone of %1" ).arg(
-					_this.parentNode().toElement().attribute( "name" ) ) );
+		// Name is set by Track::clone() via uniqueName(), no need to set here
 	}
 	else
 	{

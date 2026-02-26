@@ -155,6 +155,7 @@ public slots:
 	bool saveProjectAs();
 	bool saveProjectAsNewVersion();
 	void saveProjectAsDefaultTemplate();
+	void saveProjectAsDefaultTemplateNoPatterns();
 	void showSettingsDialog();
 	void aboutLMMS();
 	void help();

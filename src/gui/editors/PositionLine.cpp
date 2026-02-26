@@ -65,7 +65,8 @@ void PositionLine::paintEvent(QPaintEvent* pe)
 		if (m_hasTailGradient &&
 			Engine::getSong()->isPlaying() &&
 			(Engine::getSong()->playMode() == Song::PlayMode::Song ||
-			 Engine::getSong()->playMode() == Song::PlayMode::MidiClip))
+			 Engine::getSong()->playMode() == Song::PlayMode::MidiClip ||
+			 Engine::getSong()->playMode() == Song::PlayMode::Pattern))
 		{
 			c.setAlpha(60);
 			gradient.setColorAt(w, c);

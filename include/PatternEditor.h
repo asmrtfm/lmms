@@ -56,6 +56,7 @@ public:
 	void loadSettings(const QDomElement& element) override;
 
 public slots:
+	void resetSteps();
 	void addSteps();
 	void cloneSteps();
 	void removeSteps();

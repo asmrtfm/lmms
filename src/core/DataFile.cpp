@@ -59,8 +59,12 @@ namespace lmms
 {
 
 
+// --- Forward Declarations ---
+
 static void findIds(const QDomElement& elem, QList<jo_id_t>& idList);
 
+
+// --- Static Data ---
 
 // QMap with the DOM elements that access file resources
 const DataFile::ResourcesMap DataFile::ELEMENTS_WITH_RESOURCES = {
@@ -98,14 +102,17 @@ const std::vector<ProjectVersion> DataFile::UPGRADE_VERSIONS = {
 	"1.2.0-rc3"        ,   "1.3.0"
 };
 
+// Anonymous namespace for file-local type descriptor mapping
 namespace
 {
+	/// Maps a DataFile::Type enum value to its XML string representation
 	struct TypeDescStruct
 	{
 		DataFile::Type m_type;
 		QString m_name;
 	};
 
+	/// Lookup table indexed by Type enum value for bidirectional type<->name conversion
 	const auto s_types = std::array{
 		TypeDescStruct{ DataFile::Type::Unknown, "unknown" },
 		TypeDescStruct{ DataFile::Type::SongProject, "song" },
@@ -115,13 +122,23 @@ namespace
 		TypeDescStruct{ DataFile::Type::ClipboardData, "clipboard-data" },
 		TypeDescStruct{ DataFile::Type::JournalData, "journaldata" },
 		TypeDescStruct{ DataFile::Type::EffectSettings, "effectsettings" },
-		TypeDescStruct{ DataFile::Type::MidiClip, "midiclip" }
+		TypeDescStruct{ DataFile::Type::MidiClip, "midiclip" },
+		TypeDescStruct{ DataFile::Type::PatternData, "patterndata" }
 	};
 }
 
 
 
 
+// --- Constructors ---
+
+/**
+ * @brief Construct an empty DataFile of the given type.
+ *
+ * Creates a fresh XML document with the standard LMMS project structure:
+ * <?xml ...?> / <lmms-project> / <head> + <content>. The file version is
+ * set to the latest (size of UPGRADE_METHODS), so no upgrades are needed.
+ */
 DataFile::DataFile( Type type ) :
 	QDomDocument( "lmms-project" ),
 	m_fileName(""),
@@ -141,6 +158,7 @@ DataFile::DataFile( Type type ) :
 	m_head = createElement( "head" );
 	root.appendChild( m_head );
 
+	// Content element name matches the type (e.g. "song", "patterndata")
 	m_content = createElement( typeName( type ) );
 	root.appendChild( m_content );
 
@@ -149,6 +167,13 @@ DataFile::DataFile( Type type ) :
 
 
 
+/**
+ * @brief Construct a DataFile by loading and parsing an existing file from disk.
+ *
+ * Opens the file, reads its contents, and delegates to loadData() which handles
+ * XML parsing, decompression (for .mmpz files), version detection, and upgrades.
+ * Shows a GUI error dialog if the file cannot be opened.
+ */
 DataFile::DataFile( const QString & _fileName ) :
 	QDomDocument(),
 	m_fileName(_fileName),
@@ -179,6 +204,12 @@ DataFile::DataFile( const QString & _fileName ) :
 
 
 
+/**
+ * @brief Construct a DataFile from raw byte data (e.g. clipboard or drag-and-drop).
+ *
+ * Delegates to loadData() for parsing and upgrading. The source file name
+ * is set to "<internal data>" since the data did not originate from a file.
+ */
 DataFile::DataFile( const QByteArray & _data ) :
 	QDomDocument(),
 	m_fileName(""),
@@ -193,6 +224,15 @@ DataFile::DataFile( const QByteArray & _data ) :
 
 
 
+// --- Validation & Naming ---
+
+/**
+ * @brief Check whether a file extension is valid for this DataFile's type.
+ *
+ * For known types, checks against the expected extension(s). For Type::Unknown,
+ * rejects known LMMS project/plugin extensions (those are handled by their
+ * specific types) and accepts audio sample extensions.
+ */
 bool DataFile::validate( QString extension )
 {
 	switch( m_type )
@@ -217,6 +257,12 @@ bool DataFile::validate( QString extension )
 		break;
 	case Type::MidiClip:
 		if (extension == "xpt" || extension == "xptz")
+		{
+			return true;
+		}
+		break;
+	case Type::PatternData:
+		if (extension == "xppt")
 		{
 			return true;
 		}
@@ -255,6 +301,13 @@ bool DataFile::validate( QString extension )
 
 
 
+/**
+ * @brief Ensure the filename has the correct extension for this DataFile's type.
+ *
+ * If the filename already has a valid extension, it is returned unchanged.
+ * Otherwise, the appropriate extension is appended. For SongProject files,
+ * the choice between .mmp and .mmpz depends on the "app/nommpz" config setting.
+ */
 QString DataFile::nameWithExtension( const QString & _fn ) const
 {
 	const QString extension = _fn.section( '.', -1 );
@@ -286,6 +339,12 @@ QString DataFile::nameWithExtension( const QString & _fn ) const
 				return _fn + ".xpf";
 			}
 			break;
+		case Type::PatternData:
+			if( extension != "xppt" )
+			{
+				return _fn + ".xppt";
+			}
+			break;
 		default: ;
 	}
 	return _fn;
@@ -294,20 +353,46 @@ QString DataFile::nameWithExtension( const QString & _fn ) const
 
 
 
+// --- Serialization ---
+
+/**
+ * @brief Serialize the XML document to a text stream.
+ *
+ * Strips metadata-only nodes before writing for persistent file types
+ * (projects, templates, presets, pattern data). Metadata nodes are used
+ * by the GUI but should not be saved to disk.
+ */
 void DataFile::write( QTextStream & _strm )
 {
 	if( type() == Type::SongProject || type() == Type::SongProjectTemplate
-					|| type() == Type::InstrumentTrackSettings )
+					|| type() == Type::InstrumentTrackSettings
+					|| type() == Type::PatternData )
 	{
 		cleanMetaNodes( documentElement() );
 	}
 
-	save(_strm, 2);
+	save(_strm, 2); // QDomDocument::save with indent=2
 }
 
 
 
 
+/**
+ * @brief Write the DataFile to disk, optionally bundling external resources.
+ *
+ * Implements a safe-write strategy: writes to a .new temp file first, then
+ * renames the old file to .bak (unless backups are disabled), then renames
+ * the temp file to the final name. For compressed formats (.mmpz, .xptz),
+ * the XML is qCompress'd before writing.
+ *
+ * When withResources is true, creates a bundle directory alongside the file
+ * containing a resources/ subfolder with copies of all referenced audio files,
+ * and updates the DOM paths to use local: prefixes pointing to the bundle.
+ *
+ * @param filename The target file path
+ * @param withResources If true, create a project bundle with embedded resources
+ * @return true if the write succeeded
+ */
 bool DataFile::writeFile(const QString& filename, bool withResources)
 {
 	// Small lambda function for displaying errors
@@ -439,6 +524,17 @@ bool DataFile::writeFile(const QString& filename, bool withResources)
 
 
 
+/**
+ * @brief Copy all referenced resources to a directory and update DOM paths.
+ *
+ * Iterates through all DOM elements listed in ELEMENTS_WITH_RESOURCES,
+ * resolves their file paths to absolute, copies the files to resourcesDir,
+ * and updates the DOM attributes to use local: prefix paths. Handles
+ * duplicate filenames by appending a numeric suffix (e.g. "kick-1.ogg").
+ *
+ * @param resourcesDir The target directory to copy resource files into
+ * @return true if all resources were copied successfully
+ */
 bool DataFile::copyResources(const QString& resourcesDir)
 {
 	// List of filenames used so we can append a counter to any
@@ -592,13 +688,22 @@ bool DataFile::hasLocalPlugins(QDomElement parent /* = QDomElement()*/, bool fir
 
 
 
+// --- Type Conversion Helpers ---
+
+/**
+ * @brief Look up a Type enum value from its XML string name.
+ *
+ * Searches the s_types table for a matching name. Also handles the legacy
+ * name "channelsettings" which maps to InstrumentTrackSettings for backward
+ * compatibility with very old project files.
+ */
 DataFile::Type DataFile::type( const QString& typeName )
 {
 	const auto it = std::find_if(s_types.begin(), s_types.end(),
 		[&typeName](const TypeDescStruct& type) { return type.m_name == typeName; });
 	if (it != s_types.end()) { return it->m_type; }
 
-	// compat code
+	// compat code: "channelsettings" was the old name for instrument track settings
 	if( typeName == "channelsettings" )
 	{
 		return Type::InstrumentTrackSettings;
@@ -610,6 +715,7 @@ DataFile::Type DataFile::type( const QString& typeName )
 
 
 
+/** @brief Convert a Type enum value to its XML string name via direct index lookup. */
 QString DataFile::typeName( Type type )
 {
 	return s_types[static_cast<std::size_t>(type)].m_name;
@@ -618,6 +724,15 @@ QString DataFile::typeName( Type type )
 
 
 
+// --- DOM Manipulation Helpers ---
+
+/**
+ * @brief Recursively remove metadata-only nodes from the DOM tree.
+ *
+ * Nodes with a "metadata" attribute set to a nonzero value are GUI-only
+ * annotations (e.g. editor state) that should not be persisted to disk.
+ * This walks the tree depth-first and removes them in place.
+ */
 void DataFile::cleanMetaNodes( QDomElement _de )
 {
 	QDomNode node = _de.firstChild();
@@ -625,6 +740,7 @@ void DataFile::cleanMetaNodes( QDomElement _de )
 	{
 		if( node.isElement() )
 		{
+			// Remove nodes flagged as metadata
 			if( node.toElement().attribute( "metadata" ).toInt() )
 			{
 				QDomNode ns = node.nextSibling();
@@ -632,6 +748,7 @@ void DataFile::cleanMetaNodes( QDomElement _de )
 				node = ns;
 				continue;
 			}
+			// Recurse into child elements
 			if( node.hasChildNodes() )
 			{
 				cleanMetaNodes( node.toElement() );
@@ -641,6 +758,13 @@ void DataFile::cleanMetaNodes( QDomElement _de )
 	}
 }
 
+/**
+ * @brief Replace resource path attributes using a string-to-string mapping.
+ *
+ * For each element type in ELEMENTS_WITH_RESOURCES, finds all matching DOM
+ * elements and replaces their src attribute values if they appear in the map.
+ * Used by upgrade routines that rename sample files (e.g. loop renaming).
+ */
 void DataFile::mapSrcAttributeInElementsWithResources(const QMap<QString, QString>& map)
 {
 	for (const auto& [elem, srcAttrs] : ELEMENTS_WITH_RESOURCES)
@@ -668,6 +792,11 @@ void DataFile::mapSrcAttributeInElementsWithResources(const QMap<QString, QStrin
 }
 
 
+// --- Version Upgrade Methods ---
+// Each method migrates the DOM from one file format version to the next.
+// They are called sequentially by upgrade() starting from the file's version.
+
+/** @brief Upgrade to 0.2.1-20070501: fix arp direction, scale sample track vol, flatten LADSPA links, move head metadata to attributes. */
 void DataFile::upgrade_0_2_1_20070501()
 {
 	// Upgrade to version 0.2.1-20070501
@@ -786,6 +915,7 @@ void DataFile::upgrade_0_2_1_20070501()
 }
 
 
+/** @brief Upgrade to 0.2.1-20070508: convert chord/arp disabled flags to enabled flags, rename channeltrack to instrumenttrack, rescale volume. */
 void DataFile::upgrade_0_2_1_20070508()
 {
 	// Upgrade to version 0.2.1-20070508 from some version greater than or equal to 0.2.1-20070501
@@ -848,6 +978,7 @@ void DataFile::upgrade_0_2_1_20070508()
 }
 
 
+/** @brief Upgrade to 0.3.0-rc2: decrement arp direction values by 1. */
 void DataFile::upgrade_0_3_0_rc2()
 {
 	// Upgrade to version 0.3.0-rc2 from some version greater than or equal to 0.2.1-20070508
@@ -864,6 +995,7 @@ void DataFile::upgrade_0_3_0_rc2()
 }
 
 
+/** @brief Upgrade to 0.3.0: rename pluckedstringsynth to vibedstrings, lb303 to lb302, channelsettings to instrumenttracksettings. */
 void DataFile::upgrade_0_3_0()
 {
 	// Upgrade to version 0.3.0 (final) from some version greater than or equal to 0.3.0-rc2
@@ -891,6 +1023,7 @@ void DataFile::upgrade_0_3_0()
 }
 
 
+/** @brief Upgrade to 0.4.0-20080104: convert fxdisabled attribute to enabled attribute. */
 void DataFile::upgrade_0_4_0_20080104()
 {
 	// Upgrade to version 0.4.0-20080104 from some version greater than or equal to 0.3.0 (final)
@@ -907,6 +1040,7 @@ void DataFile::upgrade_0_4_0_20080104()
 }
 
 
+/** @brief Upgrade to 0.4.0-20080118: flatten fx rack hierarchy by renaming fx to fxchain and promoting child effects up one level. */
 void DataFile::upgrade_0_4_0_20080118()
 {
 	// Upgrade to version 0.4.0-20080118 from some version greater than or equal to 0.4.0-20080104
@@ -929,6 +1063,7 @@ void DataFile::upgrade_0_4_0_20080118()
 }
 
 
+/** @brief Upgrade to 0.4.0-20080129: split arpandchords element into separate arpeggiator and chordcreator elements. */
 void DataFile::upgrade_0_4_0_20080129()
 {
 	// Upgrade to version 0.4.0-20080129 from some version greater than or equal to 0.4.0-20080118
@@ -945,6 +1080,7 @@ void DataFile::upgrade_0_4_0_20080129()
 }
 
 
+/** @brief Upgrade to 0.4.0-20080409: multiply all pos/len attributes by 3 to increase timing resolution. */
 void DataFile::upgrade_0_4_0_20080409()
 {
 	// Upgrade to version 0.4.0-20080409 from some version greater than or equal to 0.4.0-20080129
@@ -974,6 +1110,7 @@ void DataFile::upgrade_0_4_0_20080409()
 }
 
 
+/** @brief Upgrade to 0.4.0-20080607: rename midi element to midiport. */
 void DataFile::upgrade_0_4_0_20080607()
 {
 	// Upgrade to version 0.4.0-20080607 from some version greater than or equal to 0.3.0-20080409
@@ -986,6 +1123,7 @@ void DataFile::upgrade_0_4_0_20080607()
 }
 
 
+/** @brief Upgrade to 0.4.0-20080622: rename automation-pattern to automationpattern, fix Beat/Baseline typo to Beat/Bassline. */
 void DataFile::upgrade_0_4_0_20080622()
 {
 	// Upgrade to version 0.4.0-20080622 from some version greater than or equal to 0.3.0-20080607
@@ -1008,6 +1146,7 @@ void DataFile::upgrade_0_4_0_20080622()
 }
 
 
+/** @brief Upgrade to 0.4.0-beta1: convert base64-encoded binary effect key blobs to structured XML elements. */
 void DataFile::upgrade_0_4_0_beta1()
 {
 	// Upgrade to version 0.4.0-beta1 from some version greater than or equal to 0.4.0-20080622
@@ -1047,6 +1186,7 @@ void DataFile::upgrade_0_4_0_beta1()
 }
 
 
+/** @brief Upgrade to 0.4.0-rc2: fix drumsynth sample paths and decrement LB-302 shape index. */
 void DataFile::upgrade_0_4_0_rc2()
 {
 	// Upgrade to version 0.4.0-rc2 from some version greater than or equal to 0.4.0-beta1
@@ -1073,6 +1213,7 @@ void DataFile::upgrade_0_4_0_rc2()
 	}
 }
 
+/** @brief Upgrade to 1.0.99: add explicit data child elements to LADSPA controls that use log scale, assigning unique IDs. */
 void DataFile::upgrade_1_0_99()
 {
 	jo_id_t last_assigned_id = 0;
@@ -1114,10 +1255,11 @@ void DataFile::upgrade_1_0_99()
 }
 
 
+/** @brief Upgrade to 1.1.0: add default send to master (channel 0) for all FX channels except the first. */
 void DataFile::upgrade_1_1_0()
 {
 	QDomNodeList list = elementsByTagName("fxchannel");
-	for (int i = 1; !list.item(i).isNull(); ++i)
+	for (int i = 1; !list.item(i).isNull(); ++i) // skip channel 0 (master)
 	{
 		QDomElement el = list.item(i).toElement();
 		QDomElement send = createElement("send");
@@ -1128,6 +1270,7 @@ void DataFile::upgrade_1_1_0()
 }
 
 
+/** @brief Upgrade to 1.1.91: fix bassloopes typo, rename vocoder-lmms to vocoder, invert crossover EQ mutes, swap arp direction enum values. */
 void DataFile::upgrade_1_1_91()
 {
 	// Upgrade to version 1.1.91 from some version less than 1.1.91
@@ -1177,6 +1320,13 @@ void DataFile::upgrade_1_1_91()
 }
 
 
+/**
+ * @brief Recursively propagate a top-level syncmode attribute to all child tempo-sync parameters.
+ *
+ * Finds all attributes ending in "_numerator" and creates matching "_syncmode"
+ * attributes with the same sync mode value. This ensures per-parameter sync
+ * modes are set correctly after the sync mode was changed from global to per-parameter.
+ */
 static void upgradeElement_1_2_0_rc2_42( QDomElement & el )
 {
 	if( el.hasAttribute( "syncmode" ) )
@@ -1209,6 +1359,7 @@ static void upgradeElement_1_2_0_rc2_42( QDomElement & el )
 }
 
 
+/** @brief Upgrade to 1.2.0-rc3: compute beat pattern step count from pattern length, propagate per-parameter sync modes. */
 void DataFile::upgrade_1_2_0_rc3()
 {
 	// Upgrade from earlier bbtrack beat note behaviour of adding
@@ -1292,7 +1443,7 @@ void iterate_ladspa_ports(QDomElement& effect, Ftor& ftor)
 	}
 }
 
-// helper function if you need to print a QDomNode
+/** @brief Debug helper: serialize a QDomNode to a QDebug stream for diagnostic output. */
 QDebug operator<<(QDebug dbg, const QDomNode& node)
 {
 	QString s;
@@ -1302,6 +1453,7 @@ QDebug operator<<(QDebug dbg, const QDomNode& node)
 	return dbg;
 }
 
+/** @brief Upgrade to 1.3.0: rename papu to freeboy, OPL2 to opulenz, rename Calf LADSPA plugins to Veal, and remap LADSPA port numbers for many Calf effects. */
 void DataFile::upgrade_1_3_0()
 {
 	QDomNodeList list = elementsByTagName( "instrument" );
@@ -1638,6 +1790,7 @@ void DataFile::upgrade_1_3_0()
 	}
 }
 
+/** @brief Clear clip names that duplicate their parent track name, so clips display the track name by default instead of redundantly. */
 void DataFile::upgrade_noHiddenClipNames()
 {
 	QDomNodeList tracks = elementsByTagName("track");
@@ -1667,6 +1820,7 @@ void DataFile::upgrade_noHiddenClipNames()
 	}
 }
 
+/** @brief Add outValue attribute to automation nodes, duplicating the existing value for backward-compatible discrete automation. */
 void DataFile::upgrade_automationNodes()
 {
 	QDomNodeList autoPatterns = elementsByTagName("automationpattern");
@@ -1693,7 +1847,7 @@ void DataFile::upgrade_automationNodes()
 	}
 }
 
-// Convert the negative length notes to StepNotes
+/** @brief Convert legacy negative-length notes to explicit Step type notes with a standard length. */
 void DataFile::upgrade_noteTypes()
 {
 	const auto notes = elementsByTagName("note");
@@ -1711,6 +1865,7 @@ void DataFile::upgrade_noteTypes()
 	}
 }
 
+/** @brief Fix CMT delay plugin names that used commas instead of dots in decimal separators (locale issue). */
 void DataFile::upgrade_fixCMTDelays()
 {
 	static const QMap<QString, QString> nameMap {
@@ -1786,7 +1941,7 @@ void DataFile::upgrade_defaultTripleOscillatorHQ()
 }
 
 
-// Remove FX prefix from mixer and related nodes
+/** @brief Rename FX mixer elements: fxmixer to mixer, fxchannel to mixerchannel, fxch attribute to mixch. */
 void DataFile::upgrade_mixerRename()
 {
 	// Change nodename <fxmixer> to <mixer>
@@ -1846,7 +2001,7 @@ void DataFile::upgrade_mixerRename()
 }
 
 
-// Rename BB to pattern and TCO to clip
+/** @brief Rename Beat/Bassline (BB) elements to Pattern and TCO elements to Clip throughout the DOM. */
 void DataFile::upgrade_bbTcoRename()
 {
 	std::vector<std::pair<const char *, const char *>> names {
@@ -1880,7 +2035,7 @@ void DataFile::upgrade_bbTcoRename()
 }
 
 
-// Set LFO speed to 0.01 on projects made before sample-and-hold PR
+/** @brief Set random-wave LFO speed to 0.01 for projects made before the sample-and-hold feature changed LFO behavior. */
 void DataFile::upgrade_sampleAndHold()
 {
 	QDomNodeList elements = elementsByTagName("lfocontroller");
@@ -1897,6 +2052,12 @@ void DataFile::upgrade_sampleAndHold()
 }
 
 
+/**
+ * @brief Build a mapping from old loop filenames to new filenames that include BPM info.
+ *
+ * Creates entries for both bare filenames and factorysample:-prefixed paths,
+ * mapping e.g. "bassloops/briff01.ogg" to "bassloops/briff01 - 140 BPM.ogg".
+ */
 static QMap<QString, QString> buildReplacementMap()
 {
 	static constexpr auto loopBPMs = std::array{
@@ -1949,7 +2110,7 @@ static QMap<QString, QString> buildReplacementMap()
 	return namesToNamesWithBPMsMap;
 }
 
-// Change loops' filenames in <sampleclip>s
+/** @brief Rename factory loop sample files to include BPM in the filename. */
 void DataFile::upgrade_loopsRename()
 {
 	static const QMap<QString, QString> namesToNamesWithBPMsMap = buildReplacementMap();
@@ -1979,10 +2140,15 @@ void DataFile::upgrade_midiCCIndexing()
 	}
 }
 
+/**
+ * @brief Warn users about LADSPA plugins with port data stored as attributes instead of child elements.
+ *
+ * This is not a format upgrade but a diagnostic check. Older LMMS versions
+ * stored LADSPA port data as attributes on the ladspacontrols element, which
+ * could cause incorrect restoration. See GitHub issue #5738.
+ */
 void DataFile::findProblematicLadspaPlugins()
 {
-	// This is not an upgrade but a check for potentially problematic LADSPA
-	// controls. See #5738 for more details.
 
 	const QDomNodeList ladspacontrols = elementsByTagName("ladspacontrols");
 
@@ -2012,6 +2178,7 @@ void DataFile::findProblematicLadspaPlugins()
 	}
 }
 
+/** @brief Fix "bassloopes" typo in sample paths (should be "bassloops"), also applying the BPM rename. */
 void DataFile::upgrade_fixBassLoopsTypo()
 {
 	static const QMap<QString, QString> replacementMap = {
@@ -2030,9 +2197,20 @@ void DataFile::upgrade_fixBassLoopsTypo()
 	mapSrcAttributeInElementsWithResources(replacementMap);
 }
 
+// --- Upgrade Orchestration ---
+
+/**
+ * @brief Run all applicable upgrade methods to migrate this DataFile to the current format.
+ *
+ * Starting from the file's stored version index, calls each upgrade method
+ * in sequence up to the latest version. After upgrading, updates the document
+ * metadata (version, type, creator) and ensures default head attributes
+ * (time signature, master volume) are present for song-type files.
+ */
 void DataFile::upgrade()
 {
-	// Runs all necessary upgrade methods
+	// Skip upgrade methods that have already been applied (indices 0..m_fileVersion-1),
+	// then run each remaining method in order
 	std::size_t max = std::min(static_cast<std::size_t>(m_fileVersion), UPGRADE_METHODS.size());
 	std::for_each( UPGRADE_METHODS.begin() + max, UPGRADE_METHODS.end(),
 		[this](UpgradeMethod um)
@@ -2069,21 +2247,37 @@ void DataFile::upgrade()
 
 
 
+// --- Data Loading ---
+
+/**
+ * @brief Parse raw XML/compressed data and populate the DOM, applying upgrades as needed.
+ *
+ * Attempts to parse _data as XML. If that fails, tries qUncompress() first
+ * (for .mmpz compressed format) then retries parsing. After successful parsing,
+ * extracts the file type, head element, and version from the root element.
+ *
+ * For legacy files (version "1.0" or missing), the version is computed from
+ * the creator version string via legacyFileVersion(). If the file was created
+ * with a different minor version of LMMS, displays a notification to the user.
+ *
+ * Finally, triggers upgrade() if the file version is older than current.
+ */
 void DataFile::loadData( const QByteArray & _data, const QString & _sourceFile )
 {
 	QString errorMsg;
 	int line = -1, col = -1;
 	if( !setContent( _data, &errorMsg, &line, &col ) )
 	{
-		// parsing failed? then try to uncompress data
+		// Parsing as plain XML failed; try decompressing first (.mmpz format)
 		QByteArray uncompressed = qUncompress( _data );
 		if( !uncompressed.isEmpty() )
 		{
 			if( setContent( uncompressed, &errorMsg, &line, &col ) )
 			{
-				line = col = -1;
+				line = col = -1; // Reset error position on success
 			}
 		}
+		// If both plain and decompressed parsing failed, report the error
 		if( line >= 0 && col >= 0 )
 		{
 			using gui::SongEditor;
@@ -2103,14 +2297,14 @@ void DataFile::loadData( const QByteArray & _data, const QString & _sourceFile )
 		}
 	}
 
+	// Extract document structure from the parsed DOM
 	QDomElement root = documentElement();
 	m_type = type( root.attribute( "type" ) );
 	m_head = root.elementsByTagName( "head" ).item( 0 ).toElement();
 
 	if (!root.hasAttribute("version") || root.attribute("version")=="1.0")
 	{
-		// The file versioning is now a unsigned int, not maj.min, so we use
-		// legacyFileVersion() to retrieve the appropriate version
+		// Legacy files used "1.0" or no version attr; derive version from creator string
 		m_fileVersion = legacyFileVersion();
 	}
 	else
@@ -2120,14 +2314,15 @@ void DataFile::loadData( const QByteArray & _data, const QString & _sourceFile )
 		if( !success ) qWarning("File Version conversion failure.");
 	}
 
+	// Show a notification if the file was created with a different LMMS minor version
 	if (root.hasAttribute("creatorversion"))
 	{
 		using gui::SongEditor;
 
-		// compareType defaults to All, so it doesn't have to be set here
 		ProjectVersion createdWith = root.attribute("creatorversion");
 		ProjectVersion openedWith = LMMS_VERSION;
 
+		// Compare only major.minor (ignore patch) to avoid noisy warnings
 		if (createdWith.setCompareType(ProjectVersion::CompareType::Minor)
 		 !=  openedWith.setCompareType(ProjectVersion::CompareType::Minor)
 		 && gui::getGUI() != nullptr && root.attribute("type") == "song"
@@ -2152,6 +2347,14 @@ void DataFile::loadData( const QByteArray & _data, const QString & _sourceFile )
 }
 
 
+// --- Static Helpers ---
+
+/**
+ * @brief Recursively collect all "id" attribute values from the DOM tree.
+ *
+ * Used by upgrade_1_0_99() to find existing IDs so that newly created
+ * elements can be assigned unique IDs that don't conflict.
+ */
 void findIds(const QDomElement& elem, QList<jo_id_t>& idList)
 {
 	if(elem.hasAttribute("id"))
@@ -2166,17 +2369,28 @@ void findIds(const QDomElement& elem, QList<jo_id_t>& idList)
 	}
 }
 
+/**
+ * @brief Compute a numeric file version index from a legacy creator version string.
+ *
+ * Old LMMS files used a "major.minor.patch" creator version instead of an
+ * integer file version. This method finds the first entry in UPGRADE_VERSIONS
+ * that is newer than the creator version, and returns its index. This index
+ * tells upgrade() which upgrade methods still need to be applied.
+ */
 unsigned int DataFile::legacyFileVersion()
 {
-	// Version of LMMs that created this project
+	// Version of LMMS that created this project
 	ProjectVersion creator =
 		documentElement().attribute( "creatorversion" ).
 		replace( "svn", "" );
 
-	// Get an iterator pointing at the first upgrade we need to run (or at the end if there is no such upgrade)
+	// Find the first version in UPGRADE_VERSIONS that is strictly newer than
+	// the creator version. All upgrades before this point have already been applied.
 	auto firstRequiredUpgrade = std::upper_bound( UPGRADE_VERSIONS.begin(), UPGRADE_VERSIONS.end(), creator );
 
-	// Convert the iterator to an index, which is our file version (starting at 0)
+	// The index of the first required upgrade is our file version number.
+	// E.g. if the file was made with version 0.3.0, upgrades 0..3 are done,
+	// so the file version is 4 and upgrades start from index 4.
 	return std::distance( UPGRADE_VERSIONS.begin(), firstRequiredUpgrade );
 }
 

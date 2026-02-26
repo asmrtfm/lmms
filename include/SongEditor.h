@@ -196,6 +196,8 @@ protected slots:
 
 	void updateSnapLabel();
 	void normalizePatternTrackNames();
+	void exportPatterns();
+	void importPatterns();
 
 signals:
 	void playTriggered();

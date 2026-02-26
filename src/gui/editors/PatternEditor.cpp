@@ -32,6 +32,7 @@
 #include "embed.h"
 #include "MainWindow.h"
 #include "PatternStore.h"
+#include "Track.h"
 #include "PatternTrack.h"
 #include "Song.h"
 #include "StringPairDrag.h"
@@ -274,6 +275,8 @@ PatternEditorWindow::PatternEditorWindow(PatternStore* ps) :
 	stretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 	trackAndStepActionsToolBar->addWidget(stretch);
 
+	// Normalize instrument track names
+	trackAndStepActionsToolBar->addAction(tr("Normalize names"), this, SLOT(normalizeInstrumentTrackNames()));
 
 	// Step actions
 	trackAndStepActionsToolBar->addAction(embed::getIconPixmap("step_btn_remove"), tr("Remove steps"),
@@ -320,6 +323,12 @@ void PatternEditorWindow::play()
 void PatternEditorWindow::stop()
 {
 	Engine::getSong()->stop();
+}
+
+
+void PatternEditorWindow::normalizeInstrumentTrackNames()
+{
+	Track::normalizeTrackNames(Engine::patternStore());
 }
 
 

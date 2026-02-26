@@ -92,6 +92,7 @@ public:
 							TrackContainer * tc );
 	Track * clone();
 
+	static void normalizeTrackNames(TrackContainer* tc);
 
 	// pure virtual functions
 	Type type() const

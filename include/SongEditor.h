@@ -195,6 +195,7 @@ protected slots:
 	void adjustUiAfterProjectLoad();
 
 	void updateSnapLabel();
+	void normalizePatternTrackNames();
 
 signals:
 	void playTriggered();

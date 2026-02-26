@@ -88,6 +88,9 @@ public slots:
 	void play() override;
 	void stop() override;
 
+protected slots:
+	void normalizeInstrumentTrackNames();
+
 private:
 	ComboBox* m_patternComboBox;
 };

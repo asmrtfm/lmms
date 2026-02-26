@@ -55,6 +55,7 @@
 #include "TextFloat.h"
 #include "TimeDisplayWidget.h"
 #include "TimeLineWidget.h"
+#include "Track.h"
 #include "TrackView.h"
 
 namespace lmms::gui
@@ -1023,6 +1024,18 @@ SongEditorWindow::SongEditorWindow(Song* song) :
 	snapToolBar->addSeparator();
 	snapToolBar->addWidget( m_snapSizeLabel );
 
+	// Pattern actions toolbar (right side)
+	DropToolBar *patternActionsToolBar = addDropToolBarToTop(tr("Pattern actions"));
+
+	auto patternStretch = new QWidget(m_toolBar);
+	patternStretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+	patternActionsToolBar->addWidget(patternStretch);
+
+	auto normalizeAction = new QAction(tr("Normalize names"), this);
+	normalizeAction->setToolTip(tr("Normalize pattern track names (strip \"Clone of\" prefixes, deduplicate)"));
+	connect(normalizeAction, SIGNAL(triggered()), this, SLOT(normalizePatternTrackNames()));
+	patternActionsToolBar->addAction(normalizeAction);
+
 	connect(song, SIGNAL(projectLoaded()), this, SLOT(adjustUiAfterProjectLoad()));
 	connect(this, SIGNAL(resized()), m_editor, SLOT(updatePositionLine()));
 }
@@ -1133,6 +1146,12 @@ void SongEditorWindow::adjustUiAfterProjectLoad()
 	m_editor->scrolled(0);
 }
 
+
+void SongEditorWindow::normalizePatternTrackNames()
+{
+	Track::normalizeTrackNames(Engine::getSong());
+	Engine::getSong()->setModified();
+}
 
 } // namespace lmms::gui
 

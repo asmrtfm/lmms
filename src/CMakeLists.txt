@@ -166,6 +166,7 @@ SET(LMMS_REQUIRED_LIBS ${LMMS_REQUIRED_LIBS}
 	${FFTW3F_LIBRARIES}
 	SampleRate::samplerate
 	SndFile::sndfile
+	SQLite::SQLite3
 	${EXTRA_LIBRARIES}
 )
 

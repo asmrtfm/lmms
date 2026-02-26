@@ -866,6 +866,9 @@ void TrackOperationsWidget::importPattern()
 
 	Engine::audioEngine()->requestChangeInModel();
 
+	const QString firstName = QFileInfo(files[0]).baseName();
+	fprintf(stderr, "[importPattern] Renaming PatternTrack to '%s'\n", firstName.toUtf8().constData());
+	patternTrack->setName(firstName);
 	importSingleFile(patternTrack->patternIndex(), files[0]);
 
 	for (int i = 1; i < files.size(); ++i)
@@ -873,6 +876,9 @@ void TrackOperationsWidget::importPattern()
 		auto* newTrack = Track::create(Track::Type::Pattern, Engine::getSong());
 		auto* newPatternTrack = dynamic_cast<PatternTrack*>(newTrack);
 		if (!newPatternTrack) { continue; }
+		const QString baseName = QFileInfo(files[i]).baseName();
+		fprintf(stderr, "[importPattern] Setting PatternTrack name to '%s'\n", baseName.toUtf8().constData());
+		newPatternTrack->setName(baseName);
 		importSingleFile(newPatternTrack->patternIndex(), files[i]);
 	}
 

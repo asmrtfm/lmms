@@ -48,6 +48,8 @@
 #include "PluginFactory.h"
 #include "ProjectVersion.h"
 #include "SongEditor.h"
+#include "SqliteToXml.h"
+#include "XmlToSqlite.h"
 #include "TextFloat.h"
 #include "Track.h"
 #include "PathUtil.h"
@@ -181,6 +183,26 @@ DataFile::DataFile( const QString & _fileName ) :
 	m_head(),
 	m_fileVersion( UPGRADE_METHODS.size() )
 {
+	// SQLite project format (.lmms-db) — convert to XML and load via normal pipeline
+	if (SqliteToXml::isSqliteProject(_fileName))
+	{
+		fprintf(stderr, "[DataFile] Detected .lmms-db format, converting via SqliteToXml bridge\n");
+		QByteArray xmlData = SqliteToXml::convert(_fileName);
+		if (xmlData.isEmpty())
+		{
+			if (gui::getGUI() != nullptr)
+			{
+				QMessageBox::critical(nullptr,
+					gui::SongEditor::tr("Could not open file"),
+					gui::SongEditor::tr("Could not convert SQLite project file %1 to XML.")
+						.arg(_fileName));
+			}
+			return;
+		}
+		loadData(xmlData, _fileName);
+		return;
+	}
+
 	QFile inFile( _fileName );
 	if( !inFile.open( QIODevice::ReadOnly ) )
 	{
@@ -238,7 +260,7 @@ bool DataFile::validate( QString extension )
 	switch( m_type )
 	{
 	case Type::SongProject:
-		if( extension == "mmp" || extension == "mmpz" )
+		if( extension == "mmp" || extension == "mmpz" || extension == "lmms-db" )
 		{
 			return true;
 		}
@@ -317,7 +339,8 @@ QString DataFile::nameWithExtension( const QString & _fn ) const
 		case Type::SongProject:
 			if( extension != "mmp" &&
 					extension != "mpt" &&
-					extension != "mmpz" )
+					extension != "mmpz" &&
+					extension != "lmms-db" )
 			{
 				if( ConfigManager::inst()->value( "app",
 						"nommpz" ).toInt() == 0 )
@@ -470,6 +493,32 @@ bool DataFile::writeFile(const QString& filename, bool withResources)
 		}
 	}
 
+	const QString extension = fullName.section('.', -1);
+
+	// SQLite project format — use XmlToSqlite directly (bypasses QSaveFile)
+	if (extension == "lmms-db")
+	{
+		fprintf(stderr, "[DataFile] Saving as .lmms-db via XmlToSqlite bridge\n");
+		if (!XmlToSqlite::convert(*this, fullNameTemp))
+		{
+			showError(SongEditor::tr("Could not write file"),
+				SongEditor::tr("Failed to save project as SQLite database %1.").arg(fullName));
+			return false;
+		}
+
+		if (ConfigManager::inst()->value("app", "disablebackup").toInt())
+		{
+			QFile::remove(fullName);
+		}
+		else
+		{
+			QFile::remove(fullNameBak);
+			QFile::rename(fullName, fullNameBak);
+		}
+		QFile::rename(fullNameTemp, fullName);
+		return true;
+	}
+
 	QSaveFile outfile(fullNameTemp);
 
 	if (!outfile.open(QIODevice::WriteOnly | QIODevice::Truncate))
@@ -482,7 +531,6 @@ bool DataFile::writeFile(const QString& filename, bool withResources)
 		return false;
 	}
 
-	const QString extension = fullName.section('.', -1);
 	if (extension == "mmpz" || extension == "xptz")
 	{
 		QString xml;

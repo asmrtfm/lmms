@@ -1429,6 +1429,9 @@ void SongEditorWindow::importPatterns()
 		auto* newTrack = Track::create(Track::Type::Pattern, Engine::getSong());
 		auto* newPatternTrack = dynamic_cast<PatternTrack*>(newTrack);
 		if (!newPatternTrack) { continue; }
+		const QString baseName = QFileInfo(files[i]).baseName();
+		fprintf(stderr, "[importPatterns] Setting PatternTrack name to '%s'\n", baseName.toUtf8().constData());
+		newPatternTrack->setName(baseName);
 		importSingleFile(newPatternTrack->patternIndex(), files[i]);
 	}
 

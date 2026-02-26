@@ -63,7 +63,9 @@
 #include "InstrumentTrack.h"
 #include "MainWindow.h"
 #include "MidiClip.h"
+#include "PatternClip.h"
 #include "PatternStore.h"
+#include "PatternTrack.h"
 #include "PianoView.h"
 #include "PositionLine.h"
 #include "SimpleTextFloat.h"
@@ -292,11 +294,6 @@ PianoRoll::PianoRoll() :
 
 	// update timeline when in record-accompany mode
 	connect(m_timeLine, &TimeLineWidget::positionChanged, this, &PianoRoll::updatePositionAccompany);
-	// TODO
-/*	connect( engine::getSong()->getPlayPos( Song::PlayMode::Pattern ).m_timeLine,
-				SIGNAL( positionChanged( const lmms::TimePos& ) ),
-			this,
-			SLOT( updatePositionAccompany( const lmms::TimePos& ) ) );*/
 
 	removeSelection();
 
@@ -4491,17 +4488,84 @@ void PianoRoll::autoScroll( const TimePos & t )
 
 void PianoRoll::updatePosition(const TimePos & t)
 {
-	if ((Engine::getSong()->isPlaying()
-			&& Engine::getSong()->playMode() == Song::PlayMode::MidiClip
+	Song* song = Engine::getSong();
+	const auto mode = song->playMode();
+	const bool isPlaying = song->isPlaying();
+
+	// Determine the effective playhead tick position within this MidiClip.
+	// In MidiClip play mode, the timeline's own position is used directly.
+	// In Pattern/Song play mode, if the currently-open MidiClip belongs to the
+	// playing pattern, compute the pattern-local position for the piano roll.
+	int effectiveTick = static_cast<int>(m_timeLine->pos());
+	bool trackingPattern = false;
+
+	if (isPlaying && hasValidMidiClip()
+		&& m_midiClip->getTrack()->trackContainer() == Engine::patternStore())
+	{
+		int clipIndex = m_midiClip->getTrack()->getClipNum(m_midiClip);
+
+		if (mode == Song::PlayMode::Pattern)
+		{
+			// Pattern Editor playback: position runs 0..patternLength, maps directly
+			if (clipIndex == Engine::patternStore()->currentPattern())
+			{
+				effectiveTick = song->getPlayPos(Song::PlayMode::Pattern).getTicks();
+				trackingPattern = true;
+			}
+		}
+		else if (mode == Song::PlayMode::Song)
+		{
+			// Song timeline playback: find the active PatternClip at the current
+			// song position and compute the pattern-local position using the same
+			// formula as PatternTrack::play().
+			tick_t songTick = song->getPlayPos(Song::PlayMode::Song).getTicks();
+			const auto& songTracks = song->tracks();
+			for (Track* track : songTracks)
+			{
+				if (track->type() != Track::Type::Pattern || track->isMuted()) { continue; }
+				auto* patternTrack = dynamic_cast<PatternTrack*>(track);
+				if (patternTrack->patternIndex() != clipIndex) { continue; }
+
+				// Find PatternClips active at the current song position
+				Track::clipVector clips;
+				patternTrack->getClipsInRange(clips, TimePos(songTick), TimePos(songTick + 1));
+				for (const auto& clip : clips)
+				{
+					if (clip->isMuted()) { continue; }
+					auto* patClip = dynamic_cast<PatternClip*>(clip);
+					if (!patClip) { continue; }
+
+					tick_t posInClip = songTick - clip->startPosition();
+					if (posInClip < 0 || posInClip >= clip->length()) { continue; }
+
+					tick_t patternLength = Engine::patternStore()->lengthOfPattern(clipIndex)
+						* TimePos::ticksPerBar();
+					if (patternLength <= 0) { continue; }
+
+					// Same offset formula as PatternTrack::play()
+					tick_t offset = patternLength - (clip->startTimeOffset() % patternLength);
+					if (offset == patternLength) { offset = 0; }
+
+					effectiveTick = (posInClip + offset) % patternLength;
+					trackingPattern = true;
+					break;
+				}
+				if (trackingPattern) { break; }
+			}
+		}
+	}
+
+	if ((isPlaying
+			&& (mode == Song::PlayMode::MidiClip || trackingPattern)
 			&& m_timeLine->autoScroll() != TimeLineWidget::AutoScrollState::Disabled
 		) || m_scrollBack)
 	{
-		autoScroll(t);
+		autoScroll(TimePos(effectiveTick));
 	}
 	// ticks relative to m_currentPosition
 	// < 0 = outside viewport left
 	// > width = outside viewport right
-	const int pos = (static_cast<int>(m_timeLine->pos()) - m_currentPosition) * m_ppb / TimePos::ticksPerBar();
+	const int pos = (effectiveTick - m_currentPosition) * m_ppb / TimePos::ticksPerBar();
 	// if pos is within visible range, show it
 	if (pos >= 0 && pos <= width() - m_whiteKeyWidth)
 	{

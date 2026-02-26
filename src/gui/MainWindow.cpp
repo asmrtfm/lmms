@@ -403,6 +403,11 @@ void MainWindow::finalize()
 					tr( "Save without patterns..." ),
 					this, SLOT(saveProjectAsDefaultTemplateNoPatterns()));
 
+	// "Save as SQLite..." — save project in SQLite format (.lmms-db)
+	project_menu->addAction( embed::getIconPixmap( "project_save" ),
+					tr( "Save as SQLite..." ),
+					this, SLOT(saveProjectAsSqlite()));
+
 	// --- Separator between save and import/export actions ---
 	project_menu->addSeparator();
 
@@ -1351,6 +1356,78 @@ void MainWindow::saveProjectAsDefaultTemplateNoPatterns()
 
 	// Step 4: Re-write the file without pattern data
 	dataFile.writeFile(fname);
+}
+
+
+
+/**
+ * @brief Slot: Saves the current project as a SQLite .lmms-db file.
+ *
+ * Prompts the user for a filename, then converts the current project's XML DOM
+ * to SQLite format using XmlToSqlite::convert().
+ */
+void MainWindow::saveProjectAsSqlite()
+{
+	FileDialog sfd(this, tr("Save as SQLite"),
+		ConfigManager::inst()->userProjectsDir(),
+		tr("LMMS SQLite Project") + " (*.lmms-db)");
+	sfd.setAcceptMode(FileDialog::AcceptSave);
+	sfd.setFileMode(FileDialog::AnyFile);
+	sfd.setDefaultSuffix("lmms-db");
+
+	// Pre-populate with current project name but .lmms-db extension
+	QString f = Engine::getSong()->projectFileName();
+	if (!f.isEmpty())
+	{
+		sfd.setDirectory(QFileInfo(f).absolutePath());
+		QString baseName = QFileInfo(f).completeBaseName();
+		sfd.selectFile(baseName + ".lmms-db");
+	}
+
+	if (sfd.exec() != QDialog::Accepted
+		|| sfd.selectedFiles().isEmpty()
+		|| sfd.selectedFiles().first().isEmpty())
+	{
+		return;
+	}
+
+	QString fname = sfd.selectedFiles().first();
+	if (!fname.endsWith(".lmms-db"))
+	{
+		fname += ".lmms-db";
+	}
+
+	// Check for overwrite
+	if (QFile::exists(fname))
+	{
+		if (QMessageBox::warning(this,
+					 tr("Overwrite file?"),
+					 tr("The file \"%1\" already exists. Overwrite it?").arg(QFileInfo(fname).fileName()),
+					 QMessageBox::Ok,
+					 QMessageBox::Cancel) != QMessageBox::Ok)
+		{
+			return;
+		}
+	}
+
+	fprintf(stderr, "[MainWindow] Saving project as SQLite: %s\n", qPrintable(fname));
+
+	// Use the existing save pipeline — Song::saveProjectFile builds the full XML DOM
+	// and DataFile::writeFile detects the .lmms-db extension and routes through XmlToSqlite
+	bool ok = Engine::getSong()->saveProjectFile(fname);
+	if (ok)
+	{
+		fprintf(stderr, "[MainWindow] SQLite save successful: %s\n", qPrintable(fname));
+		TextFloat::displayMessage(tr("SQLite Export"),
+			tr("Project saved as %1").arg(QFileInfo(fname).fileName()),
+			embed::getIconPixmap("project_save"), 3000);
+	}
+	else
+	{
+		fprintf(stderr, "[MainWindow] SQLite save FAILED: %s\n", qPrintable(fname));
+		QMessageBox::critical(this, tr("SQLite Export Failed"),
+			tr("Failed to save project as SQLite file.\nCheck the console for details."));
+	}
 }
 
 

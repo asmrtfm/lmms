@@ -197,6 +197,8 @@ public slots:
 	void saveProjectAsDefaultTemplate();
 	/// Save the project without pattern data — prompts for filename and format (.mpt or .mmp/.mmpz)
 	void saveProjectAsDefaultTemplateNoPatterns();
+	/// Save the current project as a SQLite .lmms-db file
+	void saveProjectAsSqlite();
 	/// Open the application settings/preferences dialog
 	void showSettingsDialog();
 	/// Show the About LMMS dialog with version and credits

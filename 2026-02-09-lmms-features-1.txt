@@ -1,0 +1,1680 @@
+
+╭─── Claude Code v2.1.37 ──────────────────────────────────────────────────────╮
+│                             │ Tips for getting started                       │
+│     Welcome back Retard!    │ ✔ Run /init to create a CLAUDE.md file with i… │
+│                             │ ────────────────────────────────────────────── │
+│           ▐▛███▜▌           │ Recent activity                                │
+│          ▝▜█████▛▘          │ No recent activity                             │
+│            ▘▘ ▝▝            │                                                │
+│                             │                                                │
+│    Opus 4.6 · Claude Pro    │                                                │
+│   ~/.src/github/LMMS/lmms   │                                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+❯ /init 
+
+● I'll start by exploring the codebase structure and key files to understand the
+   project.
+
+● Explore(Explore LMMS codebase structure)
+  ⎿  Done (40 tool uses · 59.1k tokens · 1m 54s)
+
+● Now let me check for any existing CLAUDE.md or cursor/copilot rules files, and
+   read a few key files for specifics.
+
+● Searched for 4 patterns, read 2 files (ctrl+o to expand)
+
+● Let me check the test CMakeLists and CI workflow for exact build/test
+  commands.
+
+● Read 2 files (ctrl+o to expand)
+
+● Now I have everything I need. Let me create the CLAUDE.md file.
+
+● Wrote 1 memory (ctrl+o to expand)
+
+● Created CLAUDE.md with:
+
+  - Build commands — configure, build, run all tests, run single test, CI flags
+  - Code style — key formatting rules from .clang-format and coding conventions
+  - Architecture — Model-View pattern, AudioEngine threading model, track
+  system, plugin system
+  - Directory layout — where headers, source, plugins, tests, and build helpers
+  live
+  - Key subsystems — automation, effects, MIDI, plugin formats
+  - Testing — framework and conventions
+  - Dependencies — required and optional
+
+✻ Churned for 2m 42s
+
+❯ Create a feature for exporting and importing pattern tracks. Instrument   
+  tracks already have a similar feature that, although functionally         
+  different, could be used as an example of how this feature should be      
+  presented in the UI. A pattern track is like a group of instrument        
+  tracks. It will be crucial that the export feature creates a file that    
+  contains sufficient information about the instrument tracks such that,    
+  when imported into a project that might be missing some of those          
+  instruments, the import feature can use the exported info to reconstruct  
+  whatever is missing (adding the necessary instrument tracks) so that      
+  their respective piano tracks can be successfully imported exactly as     
+  they were in the source project.                                          
+
+● Entered plan mode
+  Claude is now exploring and designing an implementation approach.
+
+● Let me explore the codebase to understand the existing export/import
+  mechanisms and the pattern track system.
+
+● 3 Explore agents finished (ctrl+o to expand)
+   ├─ Explore instrument track export/import · 26 tool uses · 80.9k tokens
+   │  ⎿  Done
+   ├─ Explore pattern/BB track system · 36 tool uses · 52.4k tokens
+   │  ⎿  Done
+   └─ Explore DataFile and serialization · 30 tool uses · 71.2k tokens
+      ⎿  Done
+
+● Now let me read the key files I'll need to understand the exact implementation
+   details.
+
+● Read 4 files (ctrl+o to expand)
+
+● Let me look at the existing track context menu and how save/load presets work
+  in the UI.
+
+● Searched for 5 patterns, read 2 files (ctrl+o to expand)
+
+● Let me look at how tracks show their context menus and the
+  TrackOperationsWidget which likely has the context menu.
+
+● Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Now let me look at how Track::saveState/loadState, saveSettings/loadSettings,
+  and saveTrack/loadTrack work, and how PatternTrack saves the PatternStore.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now let me read PatternTrack::saveTrackSpecificSettings and
+  loadTrackSpecificSettings to understand how the PatternStore is serialized.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now let me read TrackContainer::saveSettings to understand how the
+  PatternStore saves its tracks.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now let me understand the InstrumentTrack save/load to see what clips look
+  like in the PatternStore context.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now let me look at the TrackContainerView to see how drops work, specifically
+  the importing/loading from files.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Now I have a thorough understanding of the codebase. Let me also check the
+  FileDialog and how the DataFile type names map to file extensions.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Now let me also quickly check the TrackContainer::classNodeName():
+
+● Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● I now have a thorough understanding of the architecture. Let me design the
+  implementation plan.
+
+● Plan(Design pattern track export/import)
+  ⎿  Done (20 tool uses · 31.4k tokens · 36s)
+
+● Let me check one more thing about clip state copying.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Clip::copyStateTo saves state, records destination position, calls
+  restoreState, then restores position. This is exactly the pattern we need. Now
+   let me also check how MidiClip saves/loads state (since that's what
+  InstrumentTrack clips are).
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Good. I have all the information I need now. Let me also check how FileDialog
+  is included and used (the pattern from InstrumentTrackWindow).
+
+● Read 1 file (ctrl+o to expand)
+
+● Now let me also check what includes PatternTrackView header needs, since I
+  might need to cast.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Good - PatternTrackView isn't currently used in TrackOperationsWidget, so I'll
+   need to add the include. Now I have all the information I need. Let me write
+  the final plan.
+
+● Updated plan
+  ⎿  /plan to preview
+
+● User approved Claude's plan
+  ⎿  Plan saved to: ~/.claude/plans/typed-greeting-sunbeam.md · /plan to 
+     edit
+     Plan: Pattern Track Export/Import Feature
+
+     Context
+
+     Users need to export patterns (groups of instrument tracks with their
+     clips) from one LMMS project and import them into another. Currently,
+     only individual instrument tracks can be exported as .xpf presets
+     (settings only, no clip/note data). A pattern track references a
+     collection of instrument tracks in the PatternStore, each with clips at
+      a specific bar index. The export must save full instrument track info
+     + clip data so that import can reconstruct missing instruments and
+     their piano roll data exactly.
+
+     Approach
+
+     Add "Export pattern..." and "Import pattern..." actions to the
+     PatternTrack context menu (gear icon). Export saves a .xppt file
+     containing all PatternStore tracks with their full settings and clips
+     at the specific pattern index. Import reads the file, creates any
+     missing instrument tracks, and restores clip data at the target pattern
+      index.
+
+     File Changes
+
+     1. include/DataFile.h — Add new DataFile type
+
+     Add PatternData to the Type enum after MidiClip:
+     PatternData
+
+     2. src/core/DataFile.cpp — Register new type
+
+     - Add to s_types array: TypeDescStruct{ DataFile::Type::PatternData, 
+     "patterndata" }
+     - Add .xppt extension validation in validate() method
+     - Add .xppt extension in nameWithExtension() method
+     - Add Type::PatternData to the write() clean-meta check alongside other
+      types
+
+     3. include/TrackOperationsWidget.h — Add new slots
+
+     Add two private slots:
+     void exportPattern();
+     void importPattern();
+
+     4. src/gui/tracks/TrackOperationsWidget.cpp — Core implementation
+
+     Menu integration (in updateMenu()):
+     Add a check for PatternTrackView* similar to the existing
+     InstrumentTrackView* and AutomationTrackView* checks:
+     if (dynamic_cast<PatternTrackView*>(m_trackView))
+     {
+         toMenu->addSeparator();
+         toMenu->addAction(tr("Export pattern..."), this,
+     SLOT(exportPattern()));
+         toMenu->addAction(tr("Import pattern..."), this,
+     SLOT(importPattern()));
+     }
+
+     Export implementation (exportPattern()):
+     1. Get PatternTrack* from m_trackView->getTrack() via dynamic_cast
+     2. Get the pattern index via patternTrack->patternIndex()
+     3. Open a FileDialog in save mode with filter "LMMS pattern file 
+     (*.xppt)"
+     4. Create DataFile(DataFile::Type::PatternData)
+     5. For each track in Engine::patternStore()->tracks():
+     a. Call track->saveState(dataFile, content) — this saves full track
+     settings + ALL clips
+     b. Post-process the XML: remove all clip child elements except the one
+     at the target pattern index, and adjust its position to bar 0 so it's
+     portable
+     6. Write the file via dataFile.writeFile(filename)
+
+     Import implementation (importPattern()):
+     1. Get PatternTrack* and target pattern index
+     2. Open a FileDialog in open mode with filter "LMMS pattern file 
+     (*.xppt)"
+     3. Load DataFile from the selected file
+     4. Request audio engine change:
+     Engine::audioEngine()->requestChangeInModel()
+     5. Iterate each <track> element in the file's content:
+     a. Extract the track name and instrument name (from <instrument 
+     name="..."> child)
+     b. Search existing PatternStore tracks for a match (same track name AND
+      instrument name)
+     c. If match found: use Clip::copyStateTo-like approach — save clip
+     state from file XML, restore into the matching track's clip at target
+     pattern index, preserving position
+     d. If no match: Create new InstrumentTrack in PatternStore via
+     Track::create(Track::Type::Instrument, Engine::patternStore()), load
+     its settings via track->loadTrackSpecificSettings() from the file
+     element, then import the clip
+     6. Call Engine::audioEngine()->doneChangeInModel()
+     7. Update PatternStore UI
+
+     Additional includes needed in TrackOperationsWidget.cpp:
+     - PatternTrackView.h
+     - PatternTrack.h
+     - PatternStore.h
+     - InstrumentTrack.h
+     - FileDialog.h
+     - Clip.h
+
+     Export XML Format
+
+     <?xml version="1.0"?>
+     <lmms-project version="N" type="patterndata" creator="LMMS" 
+     creatorversion="...">
+       <head/>
+       <patterndata>
+         <track type="0" name="Kick" muted="0" solo="0" ...>
+           <instrumenttrack vol="100" pan="0" ...>
+             <instrument name="kicker">...</instrument>
+             <eldata .../>
+             <fxchain .../>
+           </instrumenttrack>
+           <midiclip pos="0" len="192" ...>
+             <note pos="0" len="48" key="57" vol="100"/>
+             ...
+           </midiclip>
+         </track>
+         <track type="0" name="Snare" ...>
+           ...
+         </track>
+       </patterndata>
+     </lmms-project>
+
+     Key detail: clips are saved at position 0 (bar 0) regardless of their
+     original pattern index, making the file portable. On import, the clip
+     content is restored into the destination pattern's clip at the correct
+     bar position.
+
+     Import Clip Restoration Strategy
+
+     Following the existing Clip::copyStateTo pattern
+     (src/core/Clip.cpp:136):
+     1. For each track in the file, find or create the matching PatternStore
+      track
+     2. Get the destination clip at the target pattern index:
+     track->getClip(patternIndex)
+     3. Save the destination clip's position
+     4. Call clip->restoreState(clipElement) with the clip element from the
+     file (which has pos=0)
+     5. Restore the original position via clip->movePosition(savedPos)
+
+     For newly created tracks, clips are automatically created at all
+     pattern bar positions by Track::create() (which calls
+     createClipsForPattern). So we can directly restore state into
+     getClip(patternIndex).
+
+     Track Matching Logic (Import)
+
+     Match existing PatternStore tracks by instrument plugin name (from
+     <instrument name="...">) AND track name. If both match, reuse the
+     track. Otherwise, create a new track. This handles the common case
+     where the destination project already has some of the same instruments,
+      while still creating any that are missing.
+
+     Verification
+
+     1. Build: cmake --build build — verify no compilation errors
+     2. Manual test export:
+       - Open LMMS, create a pattern with multiple instrument tracks and
+     notes
+       - Right-click the PatternTrack in Song Editor → "Export pattern..."
+       - Verify .xppt file is created with correct XML structure
+     3. Manual test import into same project:
+       - Create a new PatternTrack
+       - Right-click → "Import pattern..." → select the exported file
+       - Verify clips appear in the new pattern matching the original
+     4. Manual test import into empty project:
+       - Start a new project
+       - Create a PatternTrack
+       - Import the .xppt file
+       - Verify instrument tracks are created in PatternStore with correct
+     instruments/settings
+       - Verify clips contain the correct notes
+     5. Run existing tests: cd build/tests && ctest --output-on-failure -j2
+
+
+
+
+● Let me start with the DataFile changes. First, let me read the current files.
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(include/DataFile.h)
+  ⎿  Added 2 lines, removed 1 line
+      56      ClipboardData,
+      57      JournalData,
+      58      EffectSettings,
+      59 -    MidiClip                                                   
+      59 +    MidiClip,                                                  
+      60 +    PatternData                                                
+      61    } ;
+      62  
+      63    DataFile( const QString& fileName );
+
+● Now let me update DataFile.cpp. Let me read the relevant sections.
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(src/core/DataFile.cpp)
+  ⎿  Added 2 lines, removed 1 line
+      115      TypeDescStruct{ DataFile::Type::ClipboardData, "clipboard-
+           data" },
+      116      TypeDescStruct{ DataFile::Type::JournalData, "journaldata"
+            },
+      117      TypeDescStruct{ DataFile::Type::EffectSettings, "effectset
+           tings" },
+      118 -    TypeDescStruct{ DataFile::Type::MidiClip, "midiclip" }    
+      118 +    TypeDescStruct{ DataFile::Type::MidiClip, "midiclip" },   
+      119 +    TypeDescStruct{ DataFile::Type::PatternData, "patterndata"
+          + }                                                            
+      120    };
+      121  }
+      122  
+
+● Now let me find and update the validate() and nameWithExtension() methods.
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(src/core/DataFile.cpp)
+  ⎿  Added 6 lines
+      222        return true;
+      223      }
+      224      break;
+      225 +  case Type::PatternData:                                     
+      226 +    if (extension == "xppt")                                  
+      227 +    {                                                         
+      228 +      return true;                                            
+      229 +    }                                                         
+      230 +    break;                                                    
+      231    case Type::Unknown:
+      232      if (! ( extension == "mmp" || extension == "mpt" || extens
+           ion == "mmpz" ||
+      233          extension == "xpf" || extension == "xml" ||
+
+● Update(src/core/DataFile.cpp)
+  ⎿  Added 6 lines
+      293          return _fn + ".xpf";
+      294        }
+      295        break;
+      296 +    case Type::PatternData:                                   
+      297 +      if( extension != "xppt" )                               
+      298 +      {                                                       
+      299 +        return _fn + ".xppt";                                 
+      300 +      }                                                       
+      301 +      break;                                                  
+      302      default: ;
+      303    }
+      304    return _fn;
+
+● Now let me update the write() method to include PatternData in the clean-meta
+  check.
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(src/core/DataFile.cpp)
+  ⎿  Added 2 lines, removed 1 line
+      310  void DataFile::write( QTextStream & _strm )
+      311  {
+      312    if( type() == Type::SongProject || type() == Type::SongProje
+           ctTemplate
+      313 -          || type() == Type::InstrumentTrackSettings )        
+      313 +          || type() == Type::InstrumentTrackSettings          
+      314 +          || type() == Type::PatternData )                    
+      315    {
+      316      cleanMetaNodes( documentElement() );
+      317    }
+
+● Now let me add the slots to TrackOperationsWidget.h.
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(include/TrackOperationsWidget.h)
+  ⎿  Added 2 lines
+      63    void recordingOn();
+      64    void recordingOff();
+      65    void clearTrack();
+      66 +  void exportPattern();                                        
+      67 +  void importPattern();                                        
+      68  
+      69  private:
+      70    TrackView * m_trackView;
+
+● Now for the main implementation. Let me read the current
+  TrackOperationsWidget.cpp one more time to understand the exact structure for
+  my edits.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now let me add the includes and the implementation. First, the includes:
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 7 lines
+      32  #include <QPushButton>
+      33  #include <QCheckBox>
+      34  
+      35 +#include "AudioEngine.h"                                       
+      36  #include "AutomationClip.h"
+      37  #include "AutomationTrackView.h"
+      38 +#include "Clip.h"                                              
+      39  #include "ColorChooser.h"
+      40  #include "ConfigManager.h"
+      41  #include "DataFile.h"
+      42  #include "embed.h"
+      43  #include "Engine.h"
+      44 +#include "FileDialog.h"                                        
+      45 +#include "InstrumentTrack.h"                                   
+      46  #include "InstrumentTrackView.h"
+      47 +#include "PatternStore.h"                                      
+      48 +#include "PatternTrack.h"                                      
+      49 +#include "PatternTrackView.h"                                  
+      50  #include "PixmapButton.h"
+      51  #include "Song.h"
+      52  #include "StringPairDrag.h"
+
+● Now let me add the menu items in updateMenu(). Let me read the current state:
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 6 lines
+      388      toMenu->addAction( tr( "Turn all recording on" ), this, SL
+           OT(recordingOn()));
+      389      toMenu->addAction( tr( "Turn all recording off" ), this, S
+           LOT(recordingOff()));
+      390    }
+      391 +  if (dynamic_cast<PatternTrackView*>(m_trackView))           
+      392 +  {                                                           
+      393 +    toMenu->addSeparator();                                   
+      394 +    toMenu->addAction(tr("Export pattern..."), this, SLOT(expo
+          +rtPattern()));                                                
+      395 +    toMenu->addAction(tr("Import pattern..."), this, SLOT(impo
+          +rtPattern()));                                                
+      396 +  }                                                           
+      397  
+      398    toMenu->addSeparator();
+      399  
+
+● Now let me add the export and import implementations. I'll add them before the
+   toggleRecording method. Let me check what helper I need from InstrumentTrack
+  to get the instrument name from a track element.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Good. getSavedInstrumentName is an instance method, but I can just do the same
+   logic inline for extracting instrument name from XML. Now let me also check
+  how to get the instrument name from an existing InstrumentTrack.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Now let me check the nodeName for MidiClip (since that's what clips in
+  InstrumentTracks are):
+
+● Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Good. Now I have all the info needed. Let me implement the export and import
+  methods. The key insight for the export is: I need to save each track fully
+  but only include the clip at the pattern index. For the import, I need to find
+   or create matching tracks and restore clip data.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now let me add the export and import implementations before the closing
+  namespace brace:
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 190 lines
+      435  }
+      436  
+      437  
+      438 +void TrackOperationsWidget::exportPattern()                   
+      439 +{                                                             
+      440 +  auto patternTrack = dynamic_cast<PatternTrack*>(m_trackView-
+          +>getTrack());                                                 
+      441 +  if (!patternTrack) { return; }                              
+      442 +                                                              
+      443 +  const int patternIndex = patternTrack->patternIndex();      
+      444 +                                                              
+      445 +  FileDialog sfd(this, tr("Export pattern"), "", tr("LMMS patt
+          +ern file (*.xppt)"));                                         
+      446 +  sfd.setAcceptMode(FileDialog::AcceptSave);                  
+      447 +  sfd.setFileMode(FileDialog::AnyFile);                       
+      448 +  sfd.setDefaultSuffix("xppt");                               
+      449 +                                                              
+      450 +  QString fname = patternTrack->name();                       
+      451 +  sfd.selectFile(fname.remove(QRegularExpression(FILENAME_FILT
+          +ER)));                                                        
+      452 +                                                              
+      453 +  if (sfd.exec() != QDialog::Accepted                         
+      454 +    || sfd.selectedFiles().isEmpty()                          
+      455 +    || sfd.selectedFiles().first().isEmpty())                 
+      456 +  {                                                           
+      457 +    return;                                                   
+      458 +  }                                                           
+      459 +                                                              
+      460 +  DataFile dataFile(DataFile::Type::PatternData);             
+      461 +  QDomElement& content = dataFile.content();                  
+      462 +                                                              
+      463 +  for (const auto& track : Engine::patternStore()->tracks())  
+      464 +  {                                                           
+      465 +    // Save full track state (settings + all clips)           
+      466 +    track->saveState(dataFile, content);                      
+      467 +                                                              
+      468 +    // Find the track element we just appended and remove all 
+          +clip elements                                                 
+      469 +    // except the one at the target pattern index, adjusting i
+          +ts position to bar 0                                          
+      470 +    QDomElement trackElement = content.lastChildElement("track
+          +");                                                           
+      471 +    if (trackElement.isNull()) { continue; }                  
+      472 +                                                              
+      473 +    // Collect clip elements and identify the target by positi
+          +on                                                            
+      474 +    const QString trackNodeName = trackElement.firstChildEleme
+          +nt().tagName();                                               
+      475 +    QList<QDomElement> clipElements;                          
+      476 +    QDomElement targetClipElement;                            
+      477 +    const auto targetPos = TimePos(patternIndex, 0);          
+      478 +                                                              
+      479 +    QDomNode child = trackElement.firstChild();               
+      480 +    while (!child.isNull())                                   
+      481 +    {                                                         
+      482 +      QDomElement elem = child.toElement();                   
+      483 +      QDomNode next = child.nextSibling();                    
+      484 +      // Clip elements are children of the track element that 
+          +are not the                                                   
+      485 +      // track-specific settings node and not metadata        
+      486 +      if (!elem.isNull() && elem.tagName() != trackNodeName   
+      487 +        && !elem.attribute("metadata").toInt())               
+      488 +      {                                                       
+      489 +        if (TimePos(elem.attribute("pos").toInt()) == targetPo
+          +s)                                                            
+      490 +        {                                                     
+      491 +          targetClipElement = elem;                           
+      492 +        }                                                     
+      493 +        else                                                  
+      494 +        {                                                     
+      495 +          trackElement.removeChild(child);                    
+      496 +        }                                                     
+      497 +      }                                                       
+      498 +      child = next;                                           
+      499 +    }                                                         
+      500 +                                                              
+      501 +    // Adjust target clip position to bar 0 for portability   
+      502 +    if (!targetClipElement.isNull())                          
+      503 +    {                                                         
+      504 +      targetClipElement.setAttribute("pos", 0);               
+      505 +    }                                                         
+      506 +  }                                                           
+      507 +                                                              
+      508 +  dataFile.writeFile(sfd.selectedFiles().first());            
+      509 +}                                                             
+      510 +                                                              
+      511 +                                                              
+      512 +void TrackOperationsWidget::importPattern()                   
+      513 +{                                                             
+      514 +  auto patternTrack = dynamic_cast<PatternTrack*>(m_trackView-
+          +>getTrack());                                                 
+      515 +  if (!patternTrack) { return; }                              
+      516 +                                                              
+      517 +  const int patternIndex = patternTrack->patternIndex();      
+      518 +                                                              
+      519 +  FileDialog ofd(this, tr("Import pattern"), "", tr("LMMS patt
+          +ern file (*.xppt)"));                                         
+      520 +  ofd.setAcceptMode(FileDialog::AcceptOpen);                  
+      521 +  ofd.setFileMode(FileDialog::ExistingFile);                  
+      522 +                                                              
+      523 +  if (ofd.exec() != QDialog::Accepted                         
+      524 +    || ofd.selectedFiles().isEmpty()                          
+      525 +    || ofd.selectedFiles().first().isEmpty())                 
+      526 +  {                                                           
+      527 +    return;                                                   
+      528 +  }                                                           
+      529 +                                                              
+      530 +  DataFile dataFile(ofd.selectedFiles().first());             
+      531 +                                                              
+      532 +  Engine::audioEngine()->requestChangeInModel();              
+      533 +                                                              
+      534 +  QDomElement content = dataFile.content();                   
+      535 +  QDomNode node = content.firstChild();                       
+      536 +                                                              
+      537 +  while (!node.isNull())                                      
+      538 +  {                                                           
+      539 +    QDomElement trackElement = node.toElement();              
+      540 +    node = node.nextSibling();                                
+      541 +                                                              
+      542 +    if (trackElement.isNull() || trackElement.tagName() != "tr
+          +ack") { continue; }                                           
+      543 +                                                              
+      544 +    // Only handle instrument tracks                          
+      545 +    if (static_cast<Track::Type>(trackElement.attribute("type"
+          +).toInt()) != Track::Type::Instrument)                        
+      546 +    {                                                         
+      547 +      continue;                                               
+      548 +    }                                                         
+      549 +                                                              
+      550 +    const QString trackName = trackElement.attribute("name"); 
+      551 +                                                              
+      552 +    // Extract instrument name from the track-specific setting
+          +s                                                             
+      553 +    QString instrumentName;                                   
+      554 +    QDomElement itElement = trackElement.firstChildElement("in
+          +strumenttrack");                                              
+      555 +    if (!itElement.isNull())                                  
+      556 +    {                                                         
+      557 +      QDomElement instrElement = itElement.firstChildElement("
+          +instrument");                                                 
+      558 +      if (!instrElement.isNull())                             
+      559 +      {                                                       
+      560 +        instrumentName = instrElement.attribute("name");      
+      561 +      }                                                       
+      562 +    }                                                         
+      563 +                                                              
+      564 +    // Try to find matching track in PatternStore (by name + i
+          +nstrument)                                                    
+      565 +    Track* matchingTrack = nullptr;                           
+      566 +    for (const auto& track : Engine::patternStore()->tracks())
+      567 +    {                                                         
+      568 +      auto instTrack = dynamic_cast<InstrumentTrack*>(track); 
+      569 +      if (instTrack && track->name() == trackName             
+      570 +        && instTrack->instrumentName() == instrumentName)     
+      571 +      {                                                       
+      572 +        matchingTrack = track;                                
+      573 +        break;                                                
+      574 +      }                                                       
+      575 +    }                                                         
+      576 +                                                              
+      577 +    // If no match found, create a new instrument track in Pat
+          +ternStore                                                     
+      578 +    if (!matchingTrack)                                       
+      579 +    {                                                         
+      580 +      matchingTrack = Track::create(Track::Type::Instrument, E
+          +ngine::patternStore());                                       
+      581 +      matchingTrack->setName(trackName);                      
+      582 +                                                              
+      583 +      // Load track-specific settings (instrument, effects, et
+          +c.)                                                           
+      584 +      if (!itElement.isNull())                                
+      585 +      {                                                       
+      586 +        auto instTrack = dynamic_cast<InstrumentTrack*>(matchi
+          +ngTrack);                                                     
+      587 +        if (instTrack)                                        
+      588 +        {                                                     
+      589 +          instTrack->loadTrackSpecificSettings(itElement);    
+      590 +        }                                                     
+      591 +      }                                                       
+      592 +    }                                                         
+      593 +                                                              
+      594 +    // Find the clip element in the file (should be at pos=0 f
+          +rom export)                                                   
+      595 +    QDomElement clipElement;                                  
+      596 +    QDomNode childNode = trackElement.firstChild();           
+      597 +    while (!childNode.isNull())                               
+      598 +    {                                                         
+      599 +      QDomElement childElem = childNode.toElement();          
+      600 +      if (!childElem.isNull() && childElem.tagName() != "instr
+          +umenttrack"                                                   
+      601 +        && !childElem.attribute("metadata").toInt())          
+      602 +      {                                                       
+      603 +        clipElement = childElem;                              
+      604 +        break;                                                
+      605 +      }                                                       
+      606 +      childNode = childNode.nextSibling();                    
+      607 +    }                                                         
+      608 +                                                              
+      609 +    // Import the clip data into the target pattern index     
+      610 +    if (!clipElement.isNull() && matchingTrack->numOfClips() >
+          + patternIndex)                                                
+      611 +    {                                                         
+      612 +      Clip* destClip = matchingTrack->getClip(patternIndex);  
+      613 +      if (destClip)                                           
+      614 +      {                                                       
+      615 +        const TimePos savedPos = destClip->startPosition();   
+      616 +        destClip->restoreState(clipElement);                  
+      617 +        destClip->movePosition(savedPos);                     
+      618 +      }                                                       
+      619 +    }                                                         
+      620 +  }                                                           
+      621 +                                                              
+      622 +  Engine::audioEngine()->doneChangeInModel();                 
+      623 +  Engine::patternStore()->updateComboBox();                   
+      624 +  Engine::getSong()->setModified();                           
+      625 +}                                                             
+      626 +                                                              
+      627 +                                                              
+      628  } // namespace lmms::gui
+
+● Now I need to check if I need the FILENAME_FILTER macro/constant that
+  InstrumentTrackWindow uses. Let me find its definition.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Good - FILENAME_FILTER is defined in Track.h which is already included. I also
+   need QRegularExpression. Let me check if it's already included transitively
+  or if I need to add it.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● I'm using QRegularExpression but not including the header directly. Let me
+  check if it comes in through any of the existing includes.
+  InstrumentTrackWindow.cpp includes it but this file doesn't. Let me add it.
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 1 line
+      31  #include <QPainter>
+      32  #include <QPushButton>
+      33  #include <QCheckBox>
+      34 +#include <QRegularExpression>                                  
+      35  
+      36  #include "AudioEngine.h"
+      37  #include "AutomationClip.h"
+
+● Now let me also check if TimePos is accessible. It's used in the export for
+  position comparison. Let me check what header provides it.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● It's only forward-declared in Track.h. Let me check what includes TimePos
+  properly.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● TimePos.h comes in through TrackContainerView.h which is already included. But
+   to be safe, let me check that Clip.h also brings it in.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● OK, TimePos should come through TrackContainerView.h which is already
+  included. Good enough. Now let me also check that loadTrackSpecificSettings is
+   public on InstrumentTrack:
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● Good, it's public. Let me also check instrumentName():
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Hmm, instrumentName() returns m_instrument->displayName(), not
+  m_instrument->descriptor()->name. Let me check what displayName() returns vs
+  the name attribute saved in XML.
+
+● Searched for 3 patterns, read 1 file (ctrl+o to expand)
+
+● So instrumentName() returns the display name, but in the XML, the <instrument 
+  name="..."> attribute uses m_instrument->descriptor()->name (the internal
+  plugin name like "tripleoscillator", "kicker", etc.). These are different. The
+   display name is "Triple Oscillator" but the descriptor name is
+  "tripleoscillator".
+
+  I should match on the descriptor name (what's saved in XML) not the display
+  name. Let me fix my implementation to use the correct field for comparison. I
+  need to get the descriptor name from an existing InstrumentTrack.
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● So I can use instTrack->instrument()->descriptor()->name to get the internal
+  name. Let me also verify the descriptor struct:
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Good. Now let me update my import code to compare using
+  instrument()->descriptor()->name instead of instrumentName():
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 3 lines, removed 2 lines
+      562        }
+      563      }
+      564  
+      565 -    // Try to find matching track in PatternStore (by name + i
+          -nstrument)                                                    
+      565 +    // Try to find matching track in PatternStore (by name + i
+          +nstrument plugin name)                                        
+      566      Track* matchingTrack = nullptr;
+      567      for (const auto& track : Engine::patternStore()->tracks())
+      568      {
+      569        auto instTrack = dynamic_cast<InstrumentTrack*>(track);
+      570        if (instTrack && track->name() == trackName
+      571 -        && instTrack->instrumentName() == instrumentName)     
+      571 +        && instTrack->instrument()                            
+      572 +        && instTrack->instrument()->descriptor()->name == inst
+          +rumentName)                                                   
+      573        {
+      574          matchingTrack = track;
+      575          break;
+
+● Now I also need to include the Instrument.h header to access descriptor():
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● Instrument is forward-declared in InstrumentTrack.h, so I need to include
+  Instrument.h to access descriptor(). Let me also include Plugin.h for the
+  Descriptor struct.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Good, Instrument.h includes Plugin.h. So I just need to add Instrument.h to my
+   includes:
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 1 line
+      43  #include "embed.h"
+      44  #include "Engine.h"
+      45  #include "FileDialog.h"
+      46 +#include "Instrument.h"                                        
+      47  #include "InstrumentTrack.h"
+      48  #include "InstrumentTrackView.h"
+      49  #include "PatternStore.h"
+
+● Let me verify the complete state of the implementation file before building.
+
+● Read 1 file (ctrl+o to expand)
+
+● The code looks correct. There's one issue I want to double check - the
+  comparison instTrack->instrument()->descriptor()->name == instrumentName is
+  comparing const char* with QString. In Qt, QString::operator== handles const 
+  char* correctly. Good.
+
+  Now let me also think about one edge case: the export uses
+  trackElement.firstChildElement().tagName() to identify the track-specific
+  settings node name. This should work because saveState always puts the
+  track-specific settings element first (before clips). Let me verify this by
+  re-reading Track::saveTrack:
+
+  Looking at Track::saveTrack (line 188-226), the track-specific settings node
+  (tsDe) is appended before the clips. So firstChildElement().tagName() will
+  correctly get the settings node name (e.g., "instrumenttrack", "sampletrack",
+  etc.). The clip elements come after.
+
+  But wait, there's also the muted and solo child elements from
+  m_mutedModel.saveSettings() and m_soloModel.saveSettings(). Let me check if
+  those are child elements or attributes. Looking at the save code:
+
+  m_mutedModel.saveSettings( doc, element, "muted" );
+  m_soloModel.saveSettings( doc, element, "solo" );
+
+  These save as child elements (not attributes). And in loadTrack, they're
+  filtered with:
+  else if( node.nodeName() != "muted"
+  && node.nodeName() != "solo"
+  && !node.toElement().attribute( "metadata" ).toInt() )
+
+  So muted and solo are child elements of the track element. firstChildElement()
+   could return "muted" instead of the track-specific settings. Let me fix my
+  export logic to handle this correctly.
+
+  Actually, looking more carefully: saveTrack calls
+  m_mutedModel.saveSettings(doc, element, "muted"). This uses element (the track
+   element), so it adds <muted> as a child. But saveState (which calls
+  saveSettings which calls saveTrack) wraps everything. Let me check.
+
+● Searched for 2 patterns (ctrl+o to expand)
+  ⎿  You've hit your limit · resets 1am (America/Louisville)
+     /upgrade or /extra-usage to finish what you’re working on.
+
+✻ Cogitated for 10m 43s
+
+❯ continue 
+
+● I realized there's a bug in my export code. The firstChildElement() of a track
+   element will be <muted>, not the track-specific settings node. Let me fix
+  this by using the track's nodeName() to correctly identify non-clip elements.
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 11 lines, removed 6 lines
+      472      QDomElement trackElement = content.lastChildElement("track
+           ");
+      473      if (trackElement.isNull()) { continue; }
+      474  
+      475 -    // Collect clip elements and identify the target by positi
+          -on                                                            
+      476 -    const QString trackNodeName = trackElement.firstChildEleme
+          -nt().tagName();                                               
+      477 -    QList<QDomElement> clipElements;                          
+      475 +    // Identify clip elements vs settings elements. The track 
+          +element contains:                                             
+      476 +    // - <muted>, <solo> model elements                       
+      477 +    // - the track-specific settings node (e.g. <instrumenttra
+          +ck>)                                                          
+      478 +    // - clip elements (e.g. <midiclip>, <sampleclip>, <automa
+          +tionclip>)                                                    
+      479 +    const QString settingsNodeName = track->nodeName();       
+      480      QDomElement targetClipElement;
+      481      const auto targetPos = TimePos(patternIndex, 0);
+      482  
+     ...
+      485      {
+      486        QDomElement elem = child.toElement();
+      487        QDomNode next = child.nextSibling();
+      486 -      // Clip elements are children of the track element that 
+          -are not the                                                   
+      487 -      // track-specific settings node and not metadata        
+      488 -      if (!elem.isNull() && elem.tagName() != trackNodeName   
+      488 +      // Skip non-element nodes, settings node, muted/solo nod
+          +es, and metadata                                              
+      489 +      if (!elem.isNull()                                      
+      490 +        && elem.tagName() != settingsNodeName                 
+      491 +        && elem.tagName() != "muted"                          
+      492 +        && elem.tagName() != "solo"                           
+      493          && !elem.attribute("metadata").toInt())
+      494        {
+      495 +        // This is a clip element - keep only the one at targe
+          +t position                                                    
+      496          if (TimePos(elem.attribute("pos").toInt()) == targetPo
+           s)
+      497          {
+      498            targetClipElement = elem;
+
+● Now let me also check if Track::nodeName() exists. Track inherits from
+  JournallingObject which inherits from SerializingObject. Each subclass
+  overrides nodeName().
+
+● Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● It's protected. That means I can't call track->nodeName() from outside the
+  class. I need a different approach. Let me check SampleTrack and
+  AutomationTrack too:
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● Interesting - in SampleTrack it's public, but in InstrumentTrack it's
+  protected. However, nodeName() is defined as public in SerializingObject:
+
+● Read 1 file (ctrl+o to expand)
+
+● nodeName() is declared public in SerializingObject. Even though
+  InstrumentTrack overrides it in a protected section, the base class declares
+  it public, so it's callable through a SerializingObject* or Track* pointer
+  (since Track inherits from JournallingObject → SerializingObject). C++ access
+  control is based on the static type, not the override.
+
+  Wait, actually that's wrong. If the override is in a protected section, and
+  I'm calling through a Track* pointer... hmm. Let me check. In C++, the
+  accessibility is determined by the static type of the pointer. If I have a
+  Track*, the compiler looks at Track's access. But Track doesn't override
+  nodeName() — InstrumentTrack does. The base SerializingObject declares it
+  public. So calling through Track* or SerializingObject* uses the public
+  declaration. The protected override in InstrumentTrack only matters when the
+  static type is InstrumentTrack*.
+
+  Actually, I'm iterating with const auto& track : 
+  Engine::patternStore()->tracks() which returns TrackList = 
+  std::vector<Track*>. So track is Track*. Calling track->nodeName() resolves
+  through virtual dispatch to the override, but the access check is done against
+   the static type Track*. Since Track inherits from SerializingObject where
+  nodeName() is public, this should compile fine.
+
+  Let me verify by attempting to build. But first, let me also check the
+  JournallingObject inheritance chain:
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Good. And Track:
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Good. Track → JournallingObject → SerializingObject. nodeName() is public in
+  SerializingObject, and Track doesn't redeclare it, so calling through Track*
+  should work.
+
+  Now let me try to build:
+
+● Bash(ls build/CMakeCache.txt 2>/dev/null && echo "Build dir exists" || echo
+      "Need to configure")
+  ⎿  build/CMakeCache.txt
+     Build dir exists
+
+● Bash(cmake --build build --target lmms 2>&1 | tail -60)
+  ⎿ Tool use rejected with user message: and going forward, anytime you're ready
+     to do a build, let me build it and I will provide you with any errors in a 
+    followup prompt if there is still work to be done.
+
+
+● Understood. Let me do a final review of all changed files to make sure
+  everything is correct before you build.
+
+● Read 3 files (ctrl+o to expand)
+
+● All the changes look good. Here's a summary of all modifications:
+
+  Files Modified
+
+  1. include/DataFile.h
+
+  - Added PatternData to the DataFile::Type enum
+
+  2. src/core/DataFile.cpp
+
+  - Added TypeDescStruct{ DataFile::Type::PatternData, "patterndata" } to
+  s_types array
+  - Added .xppt extension validation in validate()
+  - Added .xppt extension handling in nameWithExtension()
+  - Added Type::PatternData to the write() clean-meta check
+
+  3. include/TrackOperationsWidget.h
+
+  - Added exportPattern() and importPattern() private slots
+
+  4. src/gui/tracks/TrackOperationsWidget.cpp
+
+  - Added includes: AudioEngine.h, Clip.h, FileDialog.h, Instrument.h,
+  InstrumentTrack.h, PatternStore.h, PatternTrack.h, PatternTrackView.h,
+  QRegularExpression
+  - Added "Export pattern..." and "Import pattern..." menu items for
+  PatternTrack in updateMenu()
+  - Implemented exportPattern(): saves all PatternStore tracks with their
+  settings + only the clip at the selected pattern index (position adjusted to
+  bar 0) into a .xppt file
+  - Implemented importPattern(): reads a .xppt file, matches tracks by name +
+  instrument plugin name, creates missing tracks, and restores clip data at the
+  target pattern index
+
+  Go ahead and build — let me know if there are any errors.
+
+✻ Worked for 1m 50s
+
+❯ Good work. Now I need you to modify an existing feature. There is already 
+   an ability to create a template from the current project. The problem is 
+   that it literally just creates a copy of the current project, including  
+  all existing patern tracks.  Add an option to create a template from the  
+  current project that omits the existing pattern tracks. That way, for     
+  example, I could create a copy of the current project that has all of the 
+   settings, mixer presets, volume levels, effects - literally everything   
+  exactly as it is in the current project, but without all of the existing  
+  pattern tracks. Then, thanks to the new export/import pattern track       
+  feature you just built, I would be able to selectively import a subset of 
+   the exported pattern tracks into the new copy as a means of splitting up 
+   large projects into smaller more managable ones without having to go     
+  through and manually re-establish all of the those settings.              
+
+● Explore(Find template creation feature)
+  ⎿  Done (27 tool uses · 64.7k tokens · 30s)
+
+● Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Now let me understand Song::saveProjectFile:
+
+● Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Now I need to understand what saveState saves for the Song (which is a
+  TrackContainer). The key is that saveState calls saveSettings which calls
+  TrackContainer::saveSettings, which iterates all tracks. The pattern tracks
+  are among those tracks.
+
+  Let me check Song::saveSettings:
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Song inherits TrackContainer which has saveSettings. The saveState in Song
+  calls saveSettings which is TrackContainer::saveSettings. Let me check if Song
+   overrides it:
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Good, Song doesn't override saveSettings/loadSettings. It uses
+  TrackContainer::saveSettings which simply iterates all tracks and calls
+  track->saveState() for each.
+
+  Now I understand the full picture. The "Save as default template" feature
+  calls Song::saveProjectFile() which saves everything including all pattern
+  tracks. I need to add an option to omit pattern tracks.
+
+  The cleanest approach: add a new method or a parameter to saveProjectFile that
+   skips pattern tracks, and add a new menu action. But I want to keep changes
+  minimal. Let me think about the best approach.
+
+  Looking at saveProjectFile:
+  1. It calls saveState(dataFile, dataFile.content()) — this is Song::saveState
+  → TrackContainer::saveSettings which saves ALL tracks
+  2. After saving, I could remove pattern track elements from the XML before
+  writing
+
+  This post-processing approach is clean and doesn't require modifying the
+  serialization infrastructure.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now let me also look at Song::saveProjectFile and the Song header to see if
+  there's an option parameter:
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Now I have a clear picture. The simplest approach:
+
+  1. Add a new slot saveProjectAsDefaultTemplateNoPatterns() in MainWindow
+  2. Add a new menu item "Save as default template (without patterns)"
+  3. Implement it by calling Song::saveProjectFile() and then post-processing is
+   tricky since it returns a bool...
+
+  Actually, a cleaner approach: add a parameter to Song::saveProjectFile to skip
+   pattern tracks, or better yet, add a separate method that removes pattern
+  tracks from the saved XML. But the cleanest approach without modifying Song:
+  do what saveProjectAsDefaultTemplate does but post-process the file after
+  saving to remove pattern tracks.
+
+  Wait, even cleaner: build the DataFile manually like saveProjectFile does, but
+   skip pattern tracks before writing. Let me add a parameter to saveProjectFile
+   or create a wrapper.
+
+  Actually, the absolute simplest approach that minimizes changes:
+
+  1. Add a new menu item next to the existing one
+  2. In the slot, call the same save but strip pattern tracks from the XML
+  before writing
+
+  Let me look at how the patternstore is saved within the project file to
+  understand what needs to be removed.
+
+  Looking at saveProjectFile, saveState(dataFile, dataFile.content()) saves the
+  Song's tracks (which includes PatternTracks in the Song editor). The
+  PatternStore itself is saved inside the first PatternTrack's settings
+  (PatternTrack::saveTrackSpecificSettings saves the entire PatternStore when
+  s_infoMap[this] == 0).
+
+  So to strip pattern tracks, I need to:
+  1. Save the project normally
+  2. Remove all <track type="1"> elements from the content (type 1 = Pattern)
+  3. This automatically removes the PatternStore data too (since it's nested
+  inside the first PatternTrack)
+
+  Let me implement this:
+
+● Update(include/MainWindow.h)
+  ⎿  Added 1 line
+      157    bool saveProjectAs();
+      158    bool saveProjectAsNewVersion();
+      159    void saveProjectAsDefaultTemplate();
+      160 +  void saveProjectAsDefaultTemplateNoPatterns();              
+      161    void showSettingsDialog();
+      162    void aboutLMMS();
+      163    void help();
+
+● Now add the menu item and implementation in MainWindow.cpp:
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(src/gui/MainWindow.cpp)
+  ⎿  Added 3 lines
+      302    project_menu->addAction( embed::getIconPixmap( "project_save
+           " ),
+      303            tr( "Save as default template" ),
+      304            this, SLOT(saveProjectAsDefaultTemplate()));
+      305 +  project_menu->addAction( embed::getIconPixmap( "project_save
+          +" ),                                                          
+      306 +          tr( "Save as default template (without patterns)" ),
+      307 +          this, SLOT(saveProjectAsDefaultTemplateNoPatterns())
+          +);                                                            
+      308  
+      309    project_menu->addSeparator();
+      310    project_menu->addAction( embed::getIconPixmap( "project_impo
+           rt" ),
+
+● Now add the implementation. Let me find the right place to add it (after
+  saveProjectAsDefaultTemplate):
+
+● Read 1 file (ctrl+o to expand)
+
+● Now let me check what includes are available in MainWindow.cpp for the XML
+  manipulation I'll need:
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Good, QDomElement and QFileInfo are already available. I need to also use the
+  Song save infrastructure. Let me look at what Song::saveProjectFile does more
+  carefully so I can replicate it with modifications.
+
+  Actually, the cleanest approach is to NOT duplicate saveProjectFile. Instead,
+  I'll:
+  1. Save the project normally to the template file
+  2. Re-read the saved file as a DataFile
+  3. Remove pattern track elements
+  4. Re-write the file
+
+  But that's inefficient. A better approach: add an optional parameter to
+  Song::saveProjectFile to skip pattern tracks. But that touches the Song API.
+
+  Actually, the simplest approach that avoids touching Song: build the save
+  manually in MainWindow, similar to what saveProjectFile does, but strip
+  pattern tracks from the XML before writing. Let me look at what I need:
+
+● Read 1 file (ctrl+o to expand)
+
+● This method uses private members of Song (m_savingProject, m_tempoModel, etc.)
+   and calls private methods (saveControllerStates, saveScaleStates, etc.). I
+  can't replicate this in MainWindow.
+
+  The best approach: call Song::saveProjectFile() normally, then read the file
+  back, strip pattern tracks, and re-write. This is simple and doesn't require
+  touching Song's internals.
+
+  Actually wait — there's an even simpler approach. I can call saveProjectFile
+  and then post-process the saved file:
+
+● Update(src/gui/MainWindow.cpp)
+  ⎿  Added 44 lines
+      898  
+      899  
+      900  
+      901 +void MainWindow::saveProjectAsDefaultTemplateNoPatterns()     
+      902 +{                                                             
+      903 +  QString defaultTemplate = ConfigManager::inst()->userTemplat
+          +eDir() + "default.mpt";                                       
+      904 +                                                              
+      905 +  QFileInfo fileInfo(defaultTemplate);                        
+      906 +  if (fileInfo.exists())                                      
+      907 +  {                                                           
+      908 +    if (QMessageBox::warning(this,                            
+      909 +           tr("Overwrite default template?"),                 
+      910 +           tr("This will overwrite your current default templa
+          +te."),                                                        
+      911 +           QMessageBox::Ok,                                   
+      912 +           QMessageBox::Cancel) != QMessageBox::Ok)           
+      913 +    {                                                         
+      914 +      return;                                                 
+      915 +    }                                                         
+      916 +  }                                                           
+      917 +                                                              
+      918 +  // Save the project as a template first                     
+      919 +  Engine::getSong()->saveProjectFile(defaultTemplate);        
+      920 +                                                              
+      921 +  // Re-read the saved file and strip pattern tracks          
+      922 +  DataFile dataFile(defaultTemplate);                         
+      923 +  QDomElement content = dataFile.content();                   
+      924 +                                                              
+      925 +  // Remove all pattern track elements (type 1 = Track::Type::
+          +Pattern)                                                      
+      926 +  QDomNode node = content.firstChild();                       
+      927 +  while (!node.isNull())                                      
+      928 +  {                                                           
+      929 +    QDomNode next = node.nextSibling();                       
+      930 +    QDomElement elem = node.toElement();                      
+      931 +    if (!elem.isNull() && elem.tagName() == "track"           
+      932 +      && elem.attribute("type").toInt() == static_cast<int>(Tr
+          +ack::Type::Pattern))                                          
+      933 +    {                                                         
+      934 +      content.removeChild(node);                              
+      935 +    }                                                         
+      936 +    node = next;                                              
+      937 +  }                                                           
+      938 +                                                              
+      939 +  // Re-write the file without pattern tracks                 
+      940 +  dataFile.writeFile(defaultTemplate);                        
+      941 +}                                                             
+      942 +                                                              
+      943 +                                                              
+      944 +                                                              
+      945  void MainWindow::showSettingsDialog()
+      946  {
+      947    SetupDialog sd;
+
+● Now I need to check if MainWindow.cpp has the necessary includes for
+  Track::Type, DataFile, etc.:
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● I need DataFile.h and Track.h. Let me check what's included:
+
+● Read 1 file (ctrl+o to expand)
+
+● I need DataFile.h and Track.h. Let me check if they come through
+  transitively... Song.h likely includes Track.h, and Engine.h gives access to
+  Song.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● SongEditor.h likely includes Song.h. Let me check the include chain:
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● Forward-declared only. I need to add DataFile.h and Track.h explicitly.
+  Actually, Track.h might come through one of the other includes. Let me check
+  if Engine.h or InstrumentTrackView.h brings in what I need:
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● So InstrumentTrackView.h → InstrumentTrack.h → Track.h. Track::Type should be
+  available. Now for DataFile.h:
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● I'm using DataFile but it's not included. Let me add it:
+
+● Update(src/gui/MainWindow.cpp)
+  ⎿  Added 1 line
+      38  #include "AboutDialog.h"
+      39  #include "AutomationEditor.h"
+      40  #include "ControllerRackView.h"
+      41 +#include "DataFile.h"                                          
+      42  #include "embed.h"
+      43  #include "Engine.h"
+      44  #include "ExportProjectDialog.h"
+
+● Now let me also check that Song.h is accessible for
+  Engine::getSong()->saveProjectFile(). The existing
+  saveProjectAsDefaultTemplate already calls it so it must work.
+
+  Let me verify the complete new method looks right:
+
+● Read 1 file (ctrl+o to expand)
+
+● Wait, I need to think about this more carefully. The content element in a
+  saved project is the <song> element (since Song's nodeName() returns "song"
+  and TrackContainer::saveSettings sets the tag to classNodeName() which is
+  "trackcontainer"). Let me check what the actual XML structure looks like.
+
+● Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● OK so the content element is <song>. saveState calls saveSettings which is
+  TrackContainer::saveSettings and that sets _this.setTagName("trackcontainer").
+   Wait, that changes the tag name of the content element. Let me re-check.
+
+  saveState creates doc.createElement(nodeName()) which is <song>, appends it to
+   content, then calls saveSettings on that element.
+  TrackContainer::saveSettings does _this.setTagName(classNodeName()) which
+  changes it to <trackcontainer>.
+
+  Wait, saveState appends a <song> element as a child of content. Then
+  saveSettings changes it to <trackcontainer>. So the structure is:
+
+  <lmms-project type="song" ...>
+    <head>...</head>
+    <song>                          <!-- content element, created by DataFile 
+  constructor -->
+      <trackcontainer type="song">  <!-- created by saveState, renamed by 
+  saveSettings -->
+        <track type="0" ...>        <!-- InstrumentTrack in Song editor -->
+        <track type="1" ...>        <!-- PatternTrack -->
+        ...
+      </trackcontainer>
+      <track ...>                   <!-- globalAutomationTrack -->
+      <mixer>...</mixer>
+      ...
+    </song>
+  </lmms-project>
+
+  So the pattern tracks are inside a <trackcontainer> element that's a child of
+  <song> (the content). I need to dig into that trackcontainer to remove pattern
+   tracks. Let me update my implementation:
+
+● Update(src/gui/MainWindow.cpp)
+  ⎿  Added 13 lines, removed 9 lines
+      923    DataFile dataFile(defaultTemplate);
+      924    QDomElement content = dataFile.content();
+      925  
+      926 -  // Remove all pattern track elements (type 1 = Track::Type::
+          -Pattern)                                                      
+      927 -  QDomNode node = content.firstChild();                       
+      928 -  while (!node.isNull())                                      
+      926 +  // Pattern tracks live inside the <trackcontainer> element w
+          +ithin <song>                                                  
+      927 +  QDomElement trackContainer = content.firstChildElement("trac
+          +kcontainer");                                                 
+      928 +  if (!trackContainer.isNull())                               
+      929    {
+      930 -    QDomNode next = node.nextSibling();                       
+      931 -    QDomElement elem = node.toElement();                      
+      932 -    if (!elem.isNull() && elem.tagName() == "track"           
+      933 -      && elem.attribute("type").toInt() == static_cast<int>(Tr
+          -ack::Type::Pattern))                                          
+      930 +    QDomNode node = trackContainer.firstChild();              
+      931 +    while (!node.isNull())                                    
+      932      {
+      935 -      content.removeChild(node);                              
+      933 +      QDomNode next = node.nextSibling();                     
+      934 +      QDomElement elem = node.toElement();                    
+      935 +      if (!elem.isNull() && elem.tagName() == "track"         
+      936 +        && elem.attribute("type").toInt() == static_cast<int>(
+          +Track::Type::Pattern))                                        
+      937 +      {                                                       
+      938 +        trackContainer.removeChild(node);                     
+      939 +      }                                                       
+      940 +      node = next;                                            
+      941      }
+      937 -    node = next;                                              
+      942    }
+      943  
+      944    // Re-write the file without pattern tracks
+
+❯ You might need to have it leave one or create one empty pattern track so  
+  that the instrument tracks can be carried over too.                       
+
+● Good point. The PatternStore tracks (instrument tracks that live in the
+  pattern editor) are saved inside the first PatternTrack's settings. So if I
+  remove ALL pattern tracks, I also lose all the instrument tracks in the
+  PatternStore. But the user wants to keep those instrument tracks (the mixer
+  presets, effects, etc.) — just without the pattern clips.
+
+  Let me rethink. The user wants:
+  - Keep all settings, mixer presets, volume levels, effects
+  - Remove pattern tracks from the Song editor
+  - But the instrument tracks in PatternStore should still exist (they hold the
+  instrument/effect settings)
+
+  The challenge: PatternStore data is nested inside the first PatternTrack's
+  XML. If we remove all PatternTracks, we lose the PatternStore entirely.
+
+  The solution: Keep ONE empty PatternTrack, but strip all clip data from the
+  PatternStore's tracks inside it. This preserves the instrument tracks with
+  their settings but removes all notes/clips.
+
+  Let me look at the PatternTrack save structure more carefully:
+
+● Read 1 file (ctrl+o to expand)
+
+● So the first PatternTrack (index 0) saves the entire PatternStore inside
+  <patterntrack>. The structure looks like:
+
+  <track type="1" name="Pattern 0">
+    <patterntrack>
+      <trackcontainer type="patternstore">
+        <track type="0" name="Kick">
+          <instrumenttrack>...</instrumenttrack>
+          <midiclip pos="0" .../>   <!-- pattern 0 clips -->
+          <midiclip pos="192" .../> <!-- pattern 1 clips -->
+        </track>
+        <track type="0" name="Snare">...</track>
+      </trackcontainer>
+    </patterntrack>
+    <patternclip pos="0" .../>  <!-- Song editor clips -->
+    <patternclip pos="192" .../>
+  </track>
+  <track type="1" name="Pattern 1">
+    <patterntrack/>  <!-- empty, only first PatternTrack saves PatternStore -->
+    <patternclip pos="0" .../>
+  </track>
+
+  So for the template without patterns, I should:
+  1. Keep only the FIRST PatternTrack (which contains the PatternStore data)
+  2. Remove all other PatternTracks
+  3. Inside the PatternStore, strip all clip elements from the instrument tracks
+   (keep only settings)
+  4. Remove the PatternClip elements from the remaining PatternTrack
+
+  Let me update the implementation:
+
+● Update(src/gui/MainWindow.cpp)
+  ⎿  Added 66 lines, removed 4 lines
+      919    // Save the project as a template first
+      920    Engine::getSong()->saveProjectFile(defaultTemplate);
+      921  
+      922 -  // Re-read the saved file and strip pattern tracks          
+      922 +  // Re-read the saved file and strip pattern data            
+      923    DataFile dataFile(defaultTemplate);
+      924    QDomElement content = dataFile.content();
+      925  
+      926 -  // Pattern tracks live inside the <trackcontainer> element w
+          -ithin <song>                                                  
+      926 +  // Pattern tracks live inside the <trackcontainer> element w
+          +ithin <song>.                                                 
+      927 +  // The first PatternTrack contains the PatternStore (with al
+          +l instrument tracks                                           
+      928 +  // and their settings). We keep that first PatternTrack so t
+          +he instrument tracks                                          
+      929 +  // are preserved, but strip all clip/note data and remove ex
+          +tra PatternTracks.                                            
+      930    QDomElement trackContainer = content.firstChildElement("trac
+           kcontainer");
+      931    if (!trackContainer.isNull())
+      932    {
+      933 +    bool firstPatternTrackKept = false;                       
+      934      QDomNode node = trackContainer.firstChild();
+      935      while (!node.isNull())
+      936      {
+     ...
+       939        if (!elem.isNull() && elem.tagName() == "track"
+       940          && elem.attribute("type").toInt() == static_cast<int>
+            (Track::Type::Pattern))
+       941        {
+       938 -        trackContainer.removeChild(node);                    
+       942 +        if (!firstPatternTrackKept)                          
+       943 +        {                                                    
+       944 +          // Keep the first PatternTrack (it holds the Patter
+           +nStore)                                                      
+       945 +          // but strip its PatternClip children and clear cli
+           +ps inside PatternStore                                       
+       946 +          firstPatternTrackKept = true;                      
+       947 +                                                             
+       948 +          // Remove PatternClip elements from this track     
+       949 +          QDomNode trackChild = elem.firstChild();           
+       950 +          while (!trackChild.isNull())                       
+       951 +          {                                                  
+       952 +            QDomNode trackChildNext = trackChild.nextSibling(
+           +);                                                           
+       953 +            QDomElement trackChildElem = trackChild.toElement
+           +();                                                          
+       954 +            if (!trackChildElem.isNull() && trackChildElem.ta
+           +gName() == "patternclip")                                    
+       955 +            {                                                
+       956 +              elem.removeChild(trackChild);                  
+       957 +            }                                                
+       958 +            trackChild = trackChildNext;                     
+       959 +          }                                                  
+       960 +                                                             
+       961 +          // Inside <patterntrack>, find <trackcontainer> (Pa
+           +tternStore)                                                  
+       962 +          // and strip clip elements from each instrument tra
+           +ck                                                           
+       963 +          QDomElement patternTrackSettings = elem.firstChildE
+           +lement("patterntrack");                                      
+       964 +          QDomElement patternStoreTC = patternTrackSettings.f
+           +irstChildElement("trackcontainer");                          
+       965 +          if (!patternStoreTC.isNull())                      
+       966 +          {                                                  
+       967 +            QDomNode psTrack = patternStoreTC.firstChild();  
+       968 +            while (!psTrack.isNull())                        
+       969 +            {                                                
+       970 +              QDomElement psTrackElem = psTrack.toElement(); 
+       971 +              if (!psTrackElem.isNull() && psTrackElem.tagNam
+           +e() == "track")                                              
+       972 +              {                                              
+       973 +                // Remove all clip elements (midiclip, sample
+           +clip, automationclip)                                        
+       974 +                // but keep the track-specific settings node 
+           +(instrumenttrack, etc.)                                      
+       975 +                QDomNode clipNode = psTrackElem.firstChild();
+       976 +                while (!clipNode.isNull())                   
+       977 +                {                                            
+       978 +                  QDomNode clipNext = clipNode.nextSibling();
+       979 +                  QDomElement clipElem = clipNode.toElement()
+           +;                                                            
+       980 +                  if (!clipElem.isNull()                     
+       981 +                    && clipElem.tagName() != "instrumenttrack
+           +"                                                            
+       982 +                    && clipElem.tagName() != "sampletrack"   
+       983 +                    && clipElem.tagName() != "automationtrack
+           +"                                                            
+       984 +                    && clipElem.tagName() != "muted"         
+       985 +                    && clipElem.tagName() != "solo")         
+       986 +                  {                                          
+       987 +                    psTrackElem.removeChild(clipNode);       
+       988 +                  }                                          
+       989 +                  clipNode = clipNext;                       
+       990 +                }                                            
+       991 +              }                                              
+       992 +              psTrack = psTrack.nextSibling();               
+       993 +            }                                                
+       994 +          }                                                  
+       995 +        }                                                    
+       996 +        else                                                 
+       997 +        {                                                    
+       998 +          // Remove all additional PatternTracks             
+       999 +          trackContainer.removeChild(node);                  
+      1000 +        }                                                    
+      1001        }
+      1002        node = next;
+      1003      }
+      1004    }
+      1005  
+       944 -  // Re-write the file without pattern tracks                
+      1006 +  // Re-write the file without pattern data                  
+      1007    dataFile.writeFile(defaultTemplate);
+      1008  }
+      1009  
+
+● Let me verify the final result:
+
+● Read 1 file (ctrl+o to expand)
+
+● The implementation looks correct. Let me also verify the menu and header
+  changes:
+
+● Read 1 file (ctrl+o to expand)
+
+● Everything looks good. Here's a summary of the changes for this feature:
+
+  Files Modified
+
+  1. include/MainWindow.h
+
+  - Added saveProjectAsDefaultTemplateNoPatterns() public slot
+
+  2. src/gui/MainWindow.cpp
+
+  - Added #include "DataFile.h"
+  - Added new menu item "Save as default template (without patterns)" in the
+  File menu, right after the existing "Save as default template"
+  - Implemented saveProjectAsDefaultTemplateNoPatterns():
+    a. Saves the project normally as a template (.mpt)
+    b. Re-reads the saved file
+    c. Keeps the first PatternTrack (which holds the PatternStore with all
+  instrument tracks and their settings/instruments/effects)
+    d. Strips all PatternClip elements from that PatternTrack (Song editor
+  pattern placements)
+    e. Strips all clip elements (midiclip, sampleclip, automationclip) from
+  instrument tracks inside the PatternStore (removes all note/sample/automation
+  data)
+    f. Removes all additional PatternTracks beyond the first
+    g. Re-writes the cleaned file
+
+  The result: a template that has all mixer channels, effects, instrument track
+  configurations, volume levels, etc. intact — but with no pattern arrangements
+  or note data. You can then use the pattern import feature to selectively bring
+   in patterns from exported .xppt files.
+
+  Go ahead and build to check for compilation errors.
+
+✻ Baked for 4m 8s
+
+❯ /export 
+  ⎿  Conversation exported to: 2026-02-09-lmms-features.txt
+
+❯ create a memory file containing whatever you might need in a future       
+  session to refresh your context about the features we've implemented      
+  during this session.                                                      
+
+● Recalled 1 memory, wrote 2 memories (ctrl+o to expand)
+
+● Created two memory files:
+
+  - MEMORY.md — Brief index of implemented features (loaded into system prompt
+  in future sessions)
+  - session-2026-02-09.md — Detailed reference covering both features: what they
+   do, files modified, architecture notes, XML structures, and gotchas
+  encountered during implementation
+
+✻ Churned for 54s

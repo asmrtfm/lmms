@@ -281,8 +281,51 @@ Track* Track::clone()
 	saveState(doc, parent);
 	Track* t = create(parent.firstChild().toElement(), m_trackContainer);
 
+	// Assign a unique name based on the original track's name
+	t->setName(uniqueName(name(), m_trackContainer));
+
 	AutomationClip::resolveAllIDs();
 	return t;
+}
+
+
+QString Track::uniqueName(const QString& baseName, TrackContainer* tc)
+{
+	// Strip any existing " NNN" suffix from the base name
+	static const QRegularExpression suffixPattern(R"( \d{3,}$)");
+	QString coreName = baseName;
+	coreName.remove(suffixPattern);
+
+	// Also strip any legacy "Clone of " prefixes
+	while (coreName.startsWith("Clone of "))
+	{
+		coreName = coreName.mid(9);
+	}
+
+	// Check if any track in the container already has this name or a numbered variant
+	int maxCounter = 0;
+	bool nameExists = false;
+	static const QRegularExpression counterPattern(R"(^(.*) (\d{3,})$)");
+
+	for (const auto& track : tc->tracks())
+	{
+		const QString& existingName = track->name();
+		if (existingName == coreName)
+		{
+			nameExists = true;
+			continue;
+		}
+		auto match = counterPattern.match(existingName);
+		if (match.hasMatch() && match.captured(1) == coreName)
+		{
+			nameExists = true;
+			maxCounter = std::max(maxCounter, match.captured(2).toInt());
+		}
+	}
+
+	if (!nameExists && coreName == baseName) { return baseName; }
+
+	return QString("%1 %2").arg(coreName).arg(maxCounter + 1, 3, 10, QChar('0'));
 }
 
 

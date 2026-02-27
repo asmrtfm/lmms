@@ -27,6 +27,7 @@
 #include <QMenu>
 #include <cstdio>
 
+#include <QBoxLayout>
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QDir>

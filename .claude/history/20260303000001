@@ -1,0 +1,3 @@
+User: /mcp - connect to lmms-mcp server (global)
+
+Response: Found lmms-mcp already installed at /home/me/.local/bin/lmms-mcp. Added it to ~/.claude/settings.json under mcpServers. The server provides LMMS SQLite project management tools including project file operations, catalog management, conversion tools, and track templates. Session restart required for the MCP tools to become available.

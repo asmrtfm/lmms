@@ -17,6 +17,14 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from lmms_defaults import (
+    get_effect_defaults,
+    get_instrument_defaults,
+    get_track_subsystem_defaults,
+    merge_params,
+    normalize_plugin_name,
+)
+
 CATALOG_DB_PATH = os.environ.get(
     "LMMS_CATALOG_DB", str(Path.home() / ".lmms" / "catalog.db")
 )
@@ -26,7 +34,7 @@ TOOLS_DIR = Path(__file__).parent.parent / "tools"
 
 mcp = FastMCP(
     "lmms-sqlite",
-    description=(
+    instructions=(
         "Manage LMMS projects (.lmms-db), presets, samples, and plugins via SQLite. "
         "Integrates with the SQLite project format from tools/lmms_convert.py."
     ),
@@ -2161,19 +2169,41 @@ def project_create_instrument_track(
         note_list = json.loads(notes)
         effect_list = json.loads(effects)
 
+        # Normalize plugin name to lowercase internal form
+        instrument_plugin = normalize_plugin_name(instrument_plugin)
+
+        # Merge user-provided instrument params over plugin defaults
+        user_params = json.loads(instrument_params_json)
+        plugin_defaults = get_instrument_defaults(instrument_plugin)
+        merged_instrument_params = json.dumps(
+            merge_params(plugin_defaults, user_params)
+        )
+
+        # Get track subsystem defaults (sound shaping, arpeggio, etc.)
+        subsystems = get_track_subsystem_defaults()
+
         with open_project(db_path) as conn:
             track_id = _next_id(conn, "instrument_track")
             sort_order = _next_sort_order(conn, "instrument_track")
 
-            # Create the instrument track
+            # Create the instrument track with all subsystem defaults
             conn.execute(
                 """INSERT INTO instrument_track
                    (id, name, volume, panning, pitch, mixer_channel_id,
-                    instrument_plugin, instrument_params_json, sort_order)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    instrument_plugin, instrument_params_json, sort_order,
+                    sound_shaping_json, arpeggio_json, chord_creator_json,
+                    midi_port_json, track_extra_json,
+                    instrumenttrack_extra_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (track_id, name, volume, panning, pitch,
                  mixer_channel_id or None, instrument_plugin,
-                 instrument_params_json, sort_order),
+                 merged_instrument_params, sort_order,
+                 subsystems["sound_shaping_json"],
+                 subsystems["arpeggio_json"],
+                 subsystems["chord_creator_json"],
+                 subsystems["midi_port_json"],
+                 subsystems["track_extra_json"],
+                 subsystems["instrumenttrack_extra_json"]),
             )
 
             # Create a MIDI clip for the notes (if any)
@@ -2210,18 +2240,22 @@ def project_create_instrument_track(
                     )
                     notes_inserted += 1
 
-            # Add effects
+            # Add effects with proper defaults
             effects_inserted = 0
             for i, eff in enumerate(effect_list):
                 effect_id = _next_id(conn, "effect")
+                eff_plugin = normalize_plugin_name(eff["plugin_name"])
+                eff_user_params = json.loads(eff.get("params_json", "{}"))
+                eff_defaults = get_effect_defaults(eff_plugin)
+                eff_merged = json.dumps(merge_params(eff_defaults, eff_user_params))
                 conn.execute(
                     """INSERT INTO effect (id, owner_type, owner_id, plugin_name,
                        sort_order, enabled, wet, gate, params_json)
                        VALUES (?, 'instrument_track', ?, ?, ?, ?, ?, ?, ?)""",
-                    (effect_id, track_id, eff["plugin_name"], i,
+                    (effect_id, track_id, eff_plugin, i,
                      1 if eff.get("enabled", True) else 0,
                      eff.get("wet", 1.0), eff.get("gate", 0.0),
-                     eff.get("params_json", "{}")),
+                     eff_merged),
                 )
                 effects_inserted += 1
 
@@ -2263,6 +2297,12 @@ def project_add_effect(
     if owner_type not in valid_owners:
         return _err(f"owner_type must be one of: {', '.join(sorted(valid_owners))}")
     try:
+        # Normalize plugin name and merge params over defaults
+        plugin_name = normalize_plugin_name(plugin_name)
+        user_params = json.loads(params_json)
+        eff_defaults = get_effect_defaults(plugin_name)
+        merged_params = json.dumps(merge_params(eff_defaults, user_params))
+
         with open_project(db_path) as conn:
             effect_id = _next_id(conn, "effect")
             sort_order = conn.execute(
@@ -2274,7 +2314,7 @@ def project_add_effect(
                    sort_order, enabled, wet, gate, params_json)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (effect_id, owner_type, owner_id, plugin_name,
-                 sort_order, int(enabled), wet, gate, params_json),
+                 sort_order, int(enabled), wet, gate, merged_params),
             )
             return _ok(effect_id=effect_id, plugin_name=plugin_name, owner_type=owner_type)
     except (FileNotFoundError, ValueError, sqlite3.Error) as e:

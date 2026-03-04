@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LMMS PatternStore Architecture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 24px; }
+  h1 { color: #00d4ff; margin-bottom: 8px; font-size: 22px; }
+  h2 { color: #ff9f43; margin: 32px 0 12px; font-size: 18px; border-bottom: 1px solid #333; padding-bottom: 6px; }
+  h3 { color: #a29bfe; margin: 20px 0 8px; font-size: 15px; }
+  .subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+  code { background: #2d2d44; padding: 1px 5px; border-radius: 3px; font-size: 13px; color: #ffd43b; }
+
+  /* ── Song Editor ── */
+  .song-editor { border: 2px solid #00d4ff; border-radius: 8px; padding: 16px; margin: 16px 0; background: #16213e; }
+  .song-editor-label { color: #00d4ff; font-weight: bold; font-size: 14px; margin-bottom: 10px; }
+
+  .song-track { display: flex; align-items: center; margin: 3px 0; font-size: 13px; }
+  .song-track-name { width: 200px; padding: 4px 8px; border-radius: 4px; font-weight: 500; }
+  .song-track-timeline { flex: 1; height: 28px; display: flex; gap: 2px; padding: 2px; border-radius: 4px; background: #0d1b2a; }
+
+  .track-instrument { background: #2d6a4f; }
+  .track-sample { background: #7b2d8b; }
+  .track-automation { background: #b8860b; }
+  .track-pattern { background: #1a5276; }
+
+  .clip { height: 24px; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; font-weight: 500; }
+  .clip-pattern { background: #2980b9; min-width: 60px; }
+  .clip-midi { background: #27ae60; min-width: 40px; }
+
+  /* ── PatternStore Grid ── */
+  .pattern-store { border: 2px solid #ff9f43; border-radius: 8px; padding: 16px; margin: 16px 0; background: #1e1e3a; }
+  .pattern-store-label { color: #ff9f43; font-weight: bold; font-size: 14px; margin-bottom: 10px; }
+
+  .grid { display: grid; gap: 2px; margin: 8px 0; }
+  .grid-header { background: #333; padding: 6px; text-align: center; font-size: 11px; font-weight: bold; border-radius: 3px; }
+  .grid-row-label { background: #2a2a4a; padding: 6px; font-size: 11px; border-radius: 3px; display: flex; align-items: center; }
+  .grid-cell { padding: 6px; text-align: center; font-size: 10px; border-radius: 3px; border: 1px solid #333; min-height: 36px; display: flex; align-items: center; justify-content: center; }
+  .cell-has-data { background: #1a4a1a; border-color: #27ae60; color: #7dcea0; }
+  .cell-empty { background: #1a1a2e; border-color: #2a2a3a; color: #555; }
+
+  /* ── Export highlight ── */
+  .export-col .grid-header { background: #e74c3c; color: #fff; }
+  .export-col .cell-has-data { background: #4a1a1a; border-color: #e74c3c; }
+  .export-col .cell-empty { background: #2a1a1a; border-color: #e74c3c; }
+  .export-highlight { outline: 3px dashed #e74c3c; outline-offset: -2px; }
+
+  /* ── Arrows / connections ── */
+  .connection { display: flex; align-items: center; margin: 8px 0 8px 40px; font-size: 12px; color: #888; }
+  .connection .arrow { color: #e74c3c; font-weight: bold; margin: 0 8px; font-size: 16px; }
+
+  /* ── XML representation ── */
+  .xml-block { background: #0d1117; border: 1px solid #333; border-radius: 6px; padding: 14px; margin: 8px 0; font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 12px; line-height: 1.6; overflow-x: auto; white-space: pre; }
+  .xml-tag { color: #7ee787; }
+  .xml-attr { color: #79c0ff; }
+  .xml-val { color: #ffa657; }
+  .xml-comment { color: #8b949e; font-style: italic; }
+  .xml-highlight { background: rgba(231, 76, 60, 0.2); display: inline; }
+
+  /* ── Legend ── */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 12px 0; font-size: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+
+  /* ── Info boxes ── */
+  .info { background: #16213e; border-left: 3px solid #00d4ff; padding: 10px 14px; margin: 12px 0; font-size: 13px; line-height: 1.5; border-radius: 0 4px 4px 0; }
+  .warning { background: #2a1a0a; border-left: 3px solid #e74c3c; padding: 10px 14px; margin: 12px 0; font-size: 13px; line-height: 1.5; border-radius: 0 4px 4px 0; }
+
+  .section { margin: 24px 0; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<h1>LMMS PatternStore Architecture</h1>
+<p class="subtitle">How Song, PatternTrack, PatternStore, InstrumentTrack, and MidiClip connect</p>
+
+<!-- ════════════════════════════════════════════ -->
+<h2>1. The Two TrackContainers</h2>
+
+<div class="info">
+  LMMS has two separate <code>TrackContainer</code> instances that hold tracks:<br>
+  &bull; <code>Song</code> — the main song editor (accessed via <code>Engine::getSong()</code>)<br>
+  &bull; <code>PatternStore</code> — the pattern editor grid (accessed via <code>Engine::patternStore()</code>)<br><br>
+  They are independent containers. The <code>Song</code> holds <code>PatternTrack</code> objects that
+  <em>reference</em> columns in the <code>PatternStore</code> by index.
+</div>
+
+<!-- ════════════════════════════════════════════ -->
+<h2>2. Song Editor (TrackContainer: Song)</h2>
+
+<div class="song-editor">
+  <div class="song-editor-label">Song — Engine::getSong() — contains Track objects of various types</div>
+
+  <div class="song-track">
+    <div class="song-track-name track-instrument">InstrumentTrack "Lead Synth"</div>
+    <div class="song-track-timeline">
+      <div class="clip clip-midi" style="width:80px">MidiClip</div>
+      <div class="clip clip-midi" style="width:120px">MidiClip</div>
+    </div>
+  </div>
+
+  <div class="song-track">
+    <div class="song-track-name track-sample">SampleTrack "Drums"</div>
+    <div class="song-track-timeline">
+      <div class="clip" style="background:#8e44ad;width:60px;height:24px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff">SampleClip</div>
+    </div>
+  </div>
+
+  <div class="song-track">
+    <div class="song-track-name track-automation">AutomationTrack "Volume"</div>
+    <div class="song-track-timeline">
+      <div class="clip" style="background:#d4ac0d;width:100px;height:24px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff">AutomationClip</div>
+    </div>
+  </div>
+
+  <div style="border-top:1px dashed #444; margin:8px 0; padding-top:8px">
+    <div style="color:#00d4ff;font-size:11px;margin-bottom:4px">▼ PatternTrack objects (Track::Type::Pattern) — each references a PatternStore column index</div>
+  </div>
+
+  <div class="song-track">
+    <div class="song-track-name track-pattern">PatternTrack "Pattern 0" <span style="color:#e74c3c;font-size:10px">→ index 0</span></div>
+    <div class="song-track-timeline">
+      <div class="clip clip-pattern">PatternClip</div>
+      <div style="width:20px"></div>
+      <div class="clip clip-pattern">PatternClip</div>
+      <div class="clip clip-pattern">PatternClip</div>
+    </div>
+  </div>
+
+  <div class="song-track">
+    <div class="song-track-name track-pattern">PatternTrack "Pattern 1" <span style="color:#e74c3c;font-size:10px">→ index 1</span></div>
+    <div class="song-track-timeline">
+      <div class="clip clip-pattern">PatternClip</div>
+      <div class="clip clip-pattern" style="width:90px">PatternClip</div>
+    </div>
+  </div>
+
+  <div class="song-track">
+    <div class="song-track-name track-pattern">PatternTrack "Pattern 2" <span style="color:#e74c3c;font-size:10px">→ index 2</span></div>
+    <div class="song-track-timeline">
+      <div style="width:60px"></div>
+      <div class="clip clip-pattern">PatternClip</div>
+    </div>
+  </div>
+</div>
+
+<div class="info">
+  Each <code>PatternTrack</code> has a static <code>s_infoMap</code> mapping <code>PatternTrack* → int patternIndex</code>.<br>
+  The <code>patternIndex()</code> method returns this integer. When a <code>PatternClip</code> plays, it tells the
+  <code>PatternStore</code> to play column <code>patternIndex</code>.
+</div>
+
+<!-- ════════════════════════════════════════════ -->
+<h2>3. PatternStore Grid (TrackContainer: PatternStore)</h2>
+
+<p style="font-size:13px;margin:8px 0;color:#ccc">
+  The <code>PatternStore</code> is a grid. Each <strong>row</strong> is an <code>InstrumentTrack</code>.
+  Each <strong>column</strong> corresponds to a <code>PatternTrack</code> index.
+  Each <strong>cell</strong> is a <code>MidiClip</code> (one per InstrumentTrack per column).
+</p>
+
+<div class="pattern-store">
+  <div class="pattern-store-label">PatternStore — Engine::patternStore() — contains InstrumentTrack objects</div>
+
+  <div class="grid" style="grid-template-columns: 180px repeat(5, 1fr);">
+    <!-- Header row -->
+    <div class="grid-header" style="background:transparent"></div>
+    <div class="grid-header">Column 0<br><span style="font-size:9px;color:#aaa">PatternTrack 0</span></div>
+    <div class="grid-header">Column 1<br><span style="font-size:9px;color:#aaa">PatternTrack 1</span></div>
+    <div class="grid-header export-col" title="This column would be exported for PatternTrack 2">Column 2 ★<br><span style="font-size:9px">EXPORT THIS</span></div>
+    <div class="grid-header">Column 3<br><span style="font-size:9px;color:#aaa">PatternTrack 3</span></div>
+    <div class="grid-header">Column 4<br><span style="font-size:9px;color:#aaa">PatternTrack 4</span></div>
+
+    <!-- InstrumentTrack 0 -->
+    <div class="grid-row-label">InstrumentTrack<br>"Bass" <span style="color:#666;font-size:10px">(row 0)</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=0</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=192</span></div>
+    <div class="grid-cell cell-has-data export-col export-highlight">MidiClip<br><span style="font-size:9px">pos=384</span></div>
+    <div class="grid-cell cell-empty">MidiClip<br><span style="font-size:9px">(empty)</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=768</span></div>
+
+    <!-- InstrumentTrack 1 -->
+    <div class="grid-row-label">InstrumentTrack<br>"Kick" <span style="color:#666;font-size:10px">(row 1)</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=0</span></div>
+    <div class="grid-cell cell-empty">MidiClip<br><span style="font-size:9px">(empty)</span></div>
+    <div class="grid-cell cell-has-data export-col export-highlight">MidiClip<br><span style="font-size:9px">pos=384</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=576</span></div>
+    <div class="grid-cell cell-empty">MidiClip<br><span style="font-size:9px">(empty)</span></div>
+
+    <!-- InstrumentTrack 2 -->
+    <div class="grid-row-label">InstrumentTrack<br>"Pad" <span style="color:#666;font-size:10px">(row 2)</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=0</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=192</span></div>
+    <div class="grid-cell cell-empty export-col export-highlight">MidiClip<br><span style="font-size:9px">(empty)</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=576</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=768</span></div>
+
+    <!-- InstrumentTrack 3 -->
+    <div class="grid-row-label">InstrumentTrack<br>"Lead" <span style="color:#666;font-size:10px">(row 3)</span></div>
+    <div class="grid-cell cell-empty">MidiClip<br><span style="font-size:9px">(empty)</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=192</span></div>
+    <div class="grid-cell cell-has-data export-col export-highlight">MidiClip<br><span style="font-size:9px">pos=384</span></div>
+    <div class="grid-cell cell-has-data">MidiClip<br><span style="font-size:9px">pos=576</span></div>
+    <div class="grid-cell cell-empty">MidiClip<br><span style="font-size:9px">(empty)</span></div>
+  </div>
+
+  <div class="legend" style="margin-top:12px">
+    <div class="legend-item"><div class="legend-swatch" style="background:#1a4a1a;border:1px solid #27ae60"></div> MidiClip with note data</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#1a1a2e;border:1px solid #2a2a3a"></div> MidiClip exists but empty (no notes)</div>
+    <div class="legend-item"><div class="legend-swatch" style="background:#4a1a1a;border:1px solid #e74c3c"></div> Column selected for export</div>
+  </div>
+</div>
+
+<div class="info">
+  <strong>Key detail:</strong> Each <code>InstrumentTrack</code> in the <code>PatternStore</code> has
+  <em>N</em> <code>MidiClip</code> objects in its <code>m_clips</code> vector — one per PatternTrack column.
+  <code>MidiClip[i]</code> is stored at position <code>TimePos(i, 0)</code> which equals <code>i * 192</code> ticks
+  (at default 192 ticks/bar). So column index maps directly to clip vector index:
+  <code>track->getClip(patternIndex)</code> returns the <code>MidiClip</code> for that column.
+</div>
+
+<!-- ════════════════════════════════════════════ -->
+<h2>4. How PatternTrack References PatternStore</h2>
+
+<div style="background:#16213e;border:1px solid #333;border-radius:8px;padding:16px;margin:12px 0;font-size:13px;line-height:2">
+  <div><code>PatternTrack "Pattern 2"</code> in Song</div>
+  <div style="margin-left:20px">↓ <code>PatternTrack::s_infoMap[this]</code> → <strong style="color:#e74c3c">patternIndex = 2</strong></div>
+  <div style="margin-left:20px">↓ <code>PatternTrack::play()</code> calls <code>Engine::patternStore()->play(..., 2)</code></div>
+  <div style="margin-left:20px">↓ <code>PatternStore</code> iterates its <code>InstrumentTrack</code> rows</div>
+  <div style="margin-left:40px">↓ Each <code>InstrumentTrack</code> plays <code>getClip(2)</code> → its <code>MidiClip</code> at column 2</div>
+</div>
+
+<!-- ════════════════════════════════════════════ -->
+<h2>5. Export: What Goes Into a .xppt File</h2>
+
+<p style="font-size:13px;margin:8px 0;color:#ccc">
+  Exporting <strong>PatternTrack "Pattern 2"</strong> (patternIndex=2) produces a .xppt file containing
+  the <span style="color:#e74c3c">red-highlighted column</span> from the grid above:
+  <strong>ALL InstrumentTrack rows</strong>, each with their full settings + their MidiClip at column 2.
+</p>
+
+<div class="pattern-store" style="border-color:#e74c3c">
+  <div style="color:#e74c3c;font-weight:bold;font-size:14px;margin-bottom:10px">.xppt File Contents — "Pattern_2.xppt"</div>
+  <div class="grid" style="grid-template-columns: 200px 1fr;">
+    <div class="grid-header">InstrumentTrack (full settings)</div>
+    <div class="grid-header" style="background:#e74c3c;color:#fff">MidiClip (column 2 data)</div>
+
+    <div class="grid-row-label" style="font-size:12px">
+      InstrumentTrack "Bass"<br>
+      <span style="font-size:10px;color:#888">instrument + effects + mixer channel + ...</span>
+    </div>
+    <div class="grid-cell cell-has-data export-highlight">MidiClip with notes</div>
+
+    <div class="grid-row-label" style="font-size:12px">
+      InstrumentTrack "Kick"<br>
+      <span style="font-size:10px;color:#888">instrument + effects + mixer channel + ...</span>
+    </div>
+    <div class="grid-cell cell-has-data export-highlight">MidiClip with notes</div>
+
+    <div class="grid-row-label" style="font-size:12px">
+      InstrumentTrack "Pad"<br>
+      <span style="font-size:10px;color:#888">instrument + effects + mixer channel + ...</span>
+    </div>
+    <div class="grid-cell cell-empty export-highlight">MidiClip (empty — no notes)</div>
+
+    <div class="grid-row-label" style="font-size:12px">
+      InstrumentTrack "Lead"<br>
+      <span style="font-size:10px;color:#888">instrument + effects + mixer channel + ...</span>
+    </div>
+    <div class="grid-cell cell-has-data export-highlight">MidiClip with notes</div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════ -->
+<h2>6. XML Serialization Structure</h2>
+
+<h3>6a. How a full project saves the PatternStore</h3>
+<div class="info">
+  The <code>PatternStore</code> is serialized <em>inside</em> the first <code>PatternTrack</code>'s
+  <code>&lt;patterntrack&gt;</code> settings node (see <code>PatternTrack::saveTrackSpecificSettings</code>
+  which calls <code>Engine::patternStore()->saveState()</code> only when <code>s_infoMap[this] == 0</code>).
+</div>
+
+<div class="xml-block"><span class="xml-comment">&lt;!-- Inside Song's &lt;trackcontainer&gt; --&gt;</span>
+
+<span class="xml-tag">&lt;track</span> <span class="xml-attr">type=</span><span class="xml-val">"1"</span> <span class="xml-attr">name=</span><span class="xml-val">"Pattern 0"</span><span class="xml-tag">&gt;</span>          <span class="xml-comment">&lt;!-- PatternTrack (Type::Pattern = 1) --&gt;</span>
+  <span class="xml-tag">&lt;patterntrack&gt;</span>                                        <span class="xml-comment">&lt;!-- PatternTrack settings node --&gt;</span>
+    <span class="xml-tag">&lt;trackcontainer</span> <span class="xml-attr">type=</span><span class="xml-val">"patternstore"</span><span class="xml-tag">&gt;</span>              <span class="xml-comment">&lt;!-- ★ PatternStore lives HERE --&gt;</span>
+
+      <span class="xml-tag">&lt;track</span> <span class="xml-attr">type=</span><span class="xml-val">"0"</span> <span class="xml-attr">name=</span><span class="xml-val">"Bass"</span><span class="xml-tag">&gt;</span>                  <span class="xml-comment">&lt;!-- InstrumentTrack (Type::Instrument = 0) --&gt;</span>
+        <span class="xml-tag">&lt;instrumenttrack</span> <span class="xml-attr">vol=</span><span class="xml-val">"100"</span> <span class="xml-attr">mixch=</span><span class="xml-val">"3"</span> ...<span class="xml-tag">/&gt;</span>  <span class="xml-comment">&lt;!-- instrument settings, effects, etc. --&gt;</span>
+        <span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"0"</span><span class="xml-tag">&gt;</span> ... <span class="xml-tag">&lt;/midiclip&gt;</span>            <span class="xml-comment">&lt;!-- Column 0 MidiClip --&gt;</span>
+        <span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"192"</span><span class="xml-tag">&gt;</span> ... <span class="xml-tag">&lt;/midiclip&gt;</span>          <span class="xml-comment">&lt;!-- Column 1 MidiClip --&gt;</span>
+        <span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"384"</span><span class="xml-tag">&gt;</span> ... <span class="xml-tag">&lt;/midiclip&gt;</span>          <span class="xml-comment">&lt;!-- Column 2 MidiClip --&gt;</span>
+        <span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"576"</span><span class="xml-tag">&gt;</span> ... <span class="xml-tag">&lt;/midiclip&gt;</span>          <span class="xml-comment">&lt;!-- Column 3 MidiClip --&gt;</span>
+        <span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"768"</span><span class="xml-tag">&gt;</span> ... <span class="xml-tag">&lt;/midiclip&gt;</span>          <span class="xml-comment">&lt;!-- Column 4 MidiClip --&gt;</span>
+      <span class="xml-tag">&lt;/track&gt;</span>
+
+      <span class="xml-tag">&lt;track</span> <span class="xml-attr">type=</span><span class="xml-val">"0"</span> <span class="xml-attr">name=</span><span class="xml-val">"Kick"</span><span class="xml-tag">&gt;</span>                  <span class="xml-comment">&lt;!-- Another InstrumentTrack --&gt;</span>
+        <span class="xml-tag">&lt;instrumenttrack</span> ... <span class="xml-tag">/&gt;</span>
+        <span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"0"</span><span class="xml-tag">&gt;</span> ... <span class="xml-tag">&lt;/midiclip&gt;</span>
+        <span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"192"</span><span class="xml-tag">&gt;</span> ... <span class="xml-tag">&lt;/midiclip&gt;</span>
+        <span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"384"</span><span class="xml-tag">&gt;</span> ... <span class="xml-tag">&lt;/midiclip&gt;</span>
+        ...
+      <span class="xml-tag">&lt;/track&gt;</span>
+
+      <span class="xml-comment">&lt;!-- ... more InstrumentTracks ... --&gt;</span>
+
+    <span class="xml-tag">&lt;/trackcontainer&gt;</span>
+  <span class="xml-tag">&lt;/patterntrack&gt;</span>
+  <span class="xml-tag">&lt;patternclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"0"</span> ... <span class="xml-tag">/&gt;</span>                        <span class="xml-comment">&lt;!-- PatternClip on song timeline --&gt;</span>
+  <span class="xml-tag">&lt;patternclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"384"</span> ... <span class="xml-tag">/&gt;</span>
+  <span class="xml-tag">&lt;patternclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"576"</span> ... <span class="xml-tag">/&gt;</span>
+<span class="xml-tag">&lt;/track&gt;</span>
+
+<span class="xml-tag">&lt;track</span> <span class="xml-attr">type=</span><span class="xml-val">"1"</span> <span class="xml-attr">name=</span><span class="xml-val">"Pattern 1"</span><span class="xml-tag">&gt;</span>                    <span class="xml-comment">&lt;!-- 2nd PatternTrack --&gt;</span>
+  <span class="xml-tag">&lt;patterntrack/&gt;</span>                                        <span class="xml-comment">&lt;!-- empty — PatternStore only saved in 1st --&gt;</span>
+  <span class="xml-tag">&lt;patternclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"0"</span> ... <span class="xml-tag">/&gt;</span>
+  <span class="xml-tag">&lt;patternclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"192"</span> ... <span class="xml-tag">/&gt;</span>
+<span class="xml-tag">&lt;/track&gt;</span>
+
+<span class="xml-tag">&lt;track</span> <span class="xml-attr">type=</span><span class="xml-val">"1"</span> <span class="xml-attr">name=</span><span class="xml-val">"Pattern 2"</span><span class="xml-tag">&gt;</span>                    <span class="xml-comment">&lt;!-- 3rd PatternTrack --&gt;</span>
+  <span class="xml-tag">&lt;patterntrack/&gt;</span>
+  <span class="xml-tag">&lt;patternclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"384"</span> ... <span class="xml-tag">/&gt;</span>
+<span class="xml-tag">&lt;/track&gt;</span></div>
+
+<h3>6b. What a .xppt export file looks like</h3>
+<div class="xml-block"><span class="xml-comment">&lt;!-- Pattern_2.xppt — exporting patternIndex=2 --&gt;</span>
+<span class="xml-tag">&lt;patterndata&gt;</span>
+
+  <span class="xml-tag">&lt;track</span> <span class="xml-attr">type=</span><span class="xml-val">"0"</span> <span class="xml-attr">name=</span><span class="xml-val">"Bass"</span><span class="xml-tag">&gt;</span>
+    <span class="xml-tag">&lt;instrumenttrack</span> <span class="xml-attr">vol=</span><span class="xml-val">"100"</span> <span class="xml-attr">mixch=</span><span class="xml-val">"3"</span> ... <span class="xml-tag">/&gt;</span>     <span class="xml-comment">&lt;!-- full instrument settings --&gt;</span>
+    <span class="xml-highlight"><span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"384"</span><span class="xml-tag">&gt;</span>                              <span class="xml-comment">&lt;!-- ★ only column 2's MidiClip --&gt;</span>
+      <span class="xml-tag">&lt;note</span> <span class="xml-attr">pos=</span><span class="xml-val">"0"</span> <span class="xml-attr">key=</span><span class="xml-val">"48"</span> <span class="xml-attr">len=</span><span class="xml-val">"96"</span> ... <span class="xml-tag">/&gt;</span>
+      <span class="xml-tag">&lt;note</span> <span class="xml-attr">pos=</span><span class="xml-val">"96"</span> <span class="xml-attr">key=</span><span class="xml-val">"55"</span> <span class="xml-attr">len=</span><span class="xml-val">"96"</span> ... <span class="xml-tag">/&gt;</span>
+    <span class="xml-tag">&lt;/midiclip&gt;</span></span>
+  <span class="xml-tag">&lt;/track&gt;</span>
+
+  <span class="xml-tag">&lt;track</span> <span class="xml-attr">type=</span><span class="xml-val">"0"</span> <span class="xml-attr">name=</span><span class="xml-val">"Kick"</span><span class="xml-tag">&gt;</span>
+    <span class="xml-tag">&lt;instrumenttrack</span> ... <span class="xml-tag">/&gt;</span>
+    <span class="xml-highlight"><span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"384"</span><span class="xml-tag">&gt;</span>
+      <span class="xml-tag">&lt;note</span> ... <span class="xml-tag">/&gt;</span>
+    <span class="xml-tag">&lt;/midiclip&gt;</span></span>
+  <span class="xml-tag">&lt;/track&gt;</span>
+
+  <span class="xml-tag">&lt;track</span> <span class="xml-attr">type=</span><span class="xml-val">"0"</span> <span class="xml-attr">name=</span><span class="xml-val">"Pad"</span><span class="xml-tag">&gt;</span>
+    <span class="xml-tag">&lt;instrumenttrack</span> ... <span class="xml-tag">/&gt;</span>
+    <span class="xml-highlight"><span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"384"</span><span class="xml-tag">&gt;</span>                              <span class="xml-comment">&lt;!-- empty MidiClip (no notes) --&gt;</span>
+    <span class="xml-tag">&lt;/midiclip&gt;</span></span>
+  <span class="xml-tag">&lt;/track&gt;</span>
+
+  <span class="xml-tag">&lt;track</span> <span class="xml-attr">type=</span><span class="xml-val">"0"</span> <span class="xml-attr">name=</span><span class="xml-val">"Lead"</span><span class="xml-tag">&gt;</span>
+    <span class="xml-tag">&lt;instrumenttrack</span> ... <span class="xml-tag">/&gt;</span>
+    <span class="xml-highlight"><span class="xml-tag">&lt;midiclip</span> <span class="xml-attr">pos=</span><span class="xml-val">"384"</span><span class="xml-tag">&gt;</span>
+      <span class="xml-tag">&lt;note</span> ... <span class="xml-tag">/&gt;</span>
+    <span class="xml-tag">&lt;/midiclip&gt;</span></span>
+  <span class="xml-tag">&lt;/track&gt;</span>
+
+<span class="xml-tag">&lt;/patterndata&gt;</span></div>
+
+<!-- ════════════════════════════════════════════ -->
+<h2>7. Save Without PatternTracks</h2>
+
+<p style="font-size:13px;margin:8px 0;color:#ccc">
+  Saves a .mmpz/.mmp project file with all PatternStore InstrumentTrack settings intact
+  but all MidiClip data stripped and extra PatternTracks removed. The result is a "skeleton" project.
+</p>
+
+<div class="two-col">
+  <div>
+    <h3>Before (full project)</h3>
+    <div class="pattern-store" style="border-color:#666;padding:12px">
+      <div class="grid" style="grid-template-columns: 100px repeat(3, 1fr);">
+        <div class="grid-header" style="background:transparent"></div>
+        <div class="grid-header">Col 0</div>
+        <div class="grid-header">Col 1</div>
+        <div class="grid-header">Col 2</div>
+        <div class="grid-row-label" style="font-size:11px">Bass</div>
+        <div class="grid-cell cell-has-data" style="font-size:10px">♪♪♪</div>
+        <div class="grid-cell cell-has-data" style="font-size:10px">♪♪</div>
+        <div class="grid-cell cell-has-data" style="font-size:10px">♪♪♪♪</div>
+        <div class="grid-row-label" style="font-size:11px">Kick</div>
+        <div class="grid-cell cell-has-data" style="font-size:10px">♪♪</div>
+        <div class="grid-cell cell-empty" style="font-size:10px">—</div>
+        <div class="grid-cell cell-has-data" style="font-size:10px">♪♪♪</div>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:#888">
+        Song has PatternTrack 0, 1, 2 with PatternClips
+      </div>
+    </div>
+  </div>
+  <div>
+    <h3>After (skeleton project)</h3>
+    <div class="pattern-store" style="border-color:#27ae60;padding:12px">
+      <div class="grid" style="grid-template-columns: 100px 1fr;">
+        <div class="grid-header" style="background:transparent"></div>
+        <div class="grid-header">Col 0</div>
+        <div class="grid-row-label" style="font-size:11px">Bass<br><span style="font-size:9px;color:#27ae60">settings intact ✓</span></div>
+        <div class="grid-cell cell-empty" style="font-size:10px">—</div>
+        <div class="grid-row-label" style="font-size:11px">Kick<br><span style="font-size:9px;color:#27ae60">settings intact ✓</span></div>
+        <div class="grid-cell cell-empty" style="font-size:10px">—</div>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:#888">
+        Song has 1 PatternTrack (no PatternClips), MidiClips stripped
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════ -->
+<h2>8. Combined Workflow</h2>
+
+<div style="background:#16213e;border:1px solid #333;border-radius:8px;padding:20px;margin:12px 0;font-size:13px;line-height:2.2">
+  <div><strong style="color:#ff9f43">Step 1:</strong> Export PatternTracks 0, 1, 2 → <code>Pattern_0.xppt</code>, <code>Pattern_1.xppt</code>, <code>Pattern_2.xppt</code></div>
+  <div style="margin-left:24px;color:#888">Each .xppt has ALL InstrumentTrack rows + their single-column MidiClip</div>
+
+  <div style="margin-top:8px"><strong style="color:#ff9f43">Step 2:</strong> Save Without PatternTracks → <code>project_skeleton.mmpz</code></div>
+  <div style="margin-left:24px;color:#888">Skeleton has InstrumentTrack definitions (instruments, effects, mixer channels) but no MidiClip data</div>
+
+  <div style="margin-top:8px"><strong style="color:#ff9f43">Step 3:</strong> Open skeleton, Import <code>Pattern_0.xppt</code></div>
+  <div style="margin-left:24px;color:#888">Matches existing InstrumentTracks by row order → restores MidiClip data at column 0</div>
+  <div style="margin-left:24px;color:#888"><strong style="color:#e74c3c">Current bug: creates duplicate InstrumentTracks instead of matching existing ones</strong></div>
+
+  <div style="margin-top:8px"><strong style="color:#ff9f43">Step 4:</strong> Import <code>Pattern_1.xppt</code>, <code>Pattern_2.xppt</code></div>
+  <div style="margin-left:24px;color:#888">Same matching — adds MidiClip data at columns 1, 2</div>
+</div>
+
+<div class="warning">
+  <strong>Known bugs in current implementation:</strong><br>
+  1. <strong>Export skips MidiClips:</strong> The <code>saveTrackSpecificSettings</code> path may not
+     serialize MidiClip data correctly — need to verify clip is actually being saved with note content.<br>
+  2. <strong>Import duplicates InstrumentTracks:</strong> Always creates new InstrumentTracks instead of
+     matching existing ones in the PatternStore.<br>
+  3. <strong>Import JO-ID collisions:</strong> JournallingObject IDs from the exported file collide with
+     existing IDs, causing crashes with large imports.
+</div>
+
+</body>
+</html>

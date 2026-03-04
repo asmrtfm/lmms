@@ -42,6 +42,9 @@ After evaluating the LMMS codebase (~912 C/C++ source files, 58 plugins, real-ti
 | — (new: project format) | `serde` + `serde_json`, `zip`, `rusqlite` |
 | — (new: checksums) | `sha2` (sample dedup in templates) |
 | — (new: file watching) | `notify` (live directory watching) |
+| — (new: MCP server) | `rmcp` (official Rust MCP SDK) |
+| — (new: MIDI devices) | `midir` (MIDI I/O), `midly` (MIDI file parsing) |
+| — (new: CLAP hosting) | `clack-host` (CLAP plugin hosting) |
 
 ## Proposed Module Structure
 
@@ -56,6 +59,7 @@ lmms-rs/
 │   ├── lmms-plugin-host/       (LV2/VST3/CLAP/LADSPA plugin hosting)
 │   ├── lmms-gui/               (UI layer)
 │   ├── lmms-project/           (project file read/write, .mmp compat, templates)
+│   ├── lmms-mcp/               (native MCP server for AI control)
 │   └── lmms-app/               (application entry point)
 ├── plugins/
 │   ├── triple-oscillator/
@@ -330,6 +334,272 @@ impl ProjectWriter {
 | Compression | `flate2` (for .mmpz decompression) |
 | Binary plugin state | `serde` with `bincode` or raw `&[u8]` |
 | File watching (live reload) | `notify` crate |
+
+---
+
+## Native MCP Server
+
+LMMS Studio will ship with a built-in MCP (Model Context Protocol) server, making it the first DAW that an AI assistant can directly control through a standardized protocol.
+
+### Why This Matters
+
+An MCP server turns LMMS Studio into an AI-controllable instrument. Claude (or any MCP-compatible AI) can:
+- Create tracks, load instruments, set parameters
+- Compose melodies and chord progressions by placing notes
+- Build effect chains and configure automation
+- Arrange full songs from natural language descriptions
+- Load presets, adjust mix levels, configure routing
+- Query the current project state to make informed decisions
+
+This is a massive differentiator — no other DAW offers this capability natively.
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│  LMMS Studio (Rust)                          │
+│                                              │
+│  ┌──────────┐    ┌─────────────────────┐     │
+│  │ Audio    │    │ MCP Server (rmcp)   │     │
+│  │ Engine   │    │                     │     │
+│  │          │◄───┤ Tools:              │◄────┤── stdio/HTTP ──► Claude / AI Client
+│  │ Project  │    │  create_track       │     │
+│  │ State    │    │  load_instrument    │     │
+│  │          │    │  add_notes          │     │
+│  │ Mixer    │    │  set_parameter      │     │
+│  │          │    │  add_effect         │     │
+│  └──────────┘    │  set_automation     │     │
+│                  │  control_transport  │     │
+│                  │  export_audio       │     │
+│                  │                     │     │
+│                  │ Resources:          │     │
+│                  │  project://state    │     │
+│                  │  library://presets  │     │
+│                  │  library://samples  │     │
+│                  └─────────────────────┘     │
+└──────────────────────────────────────────────┘
+```
+
+### Transport
+
+- **STDIO** for local integration (AI running on same machine)
+- **Streamable HTTP + SSE** for remote / network access
+- Runs in-process — the MCP server is a Rust module inside the DAW, not a separate process
+
+### Rust Implementation
+
+Using the official `rmcp` crate (v0.16+):
+
+```toml
+# In lmms-mcp/Cargo.toml
+[dependencies]
+rmcp = { version = "0.16", features = ["server"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+```
+
+### Tool Catalog
+
+#### Track Management
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `create_track` | Create instrument, sample, or automation track | `name`, `type`, `position` |
+| `delete_track` | Remove a track | `track_id` |
+| `duplicate_track` | Clone a track with all settings | `track_id` |
+| `rename_track` | Rename a track | `track_id`, `name` |
+| `set_track_param` | Set volume, panning, mute, solo | `track_id`, `param`, `value` |
+| `import_track_template` | Import a `.lmms-track` bundle | `file_path`, `position` |
+| `export_track_template` | Export track as `.lmms-track` | `track_id`, `file_path` |
+
+#### Instrument & Presets
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `load_instrument` | Load a plugin on a track | `track_id`, `plugin_name` |
+| `load_preset` | Load a preset file (.xpf, .xiz) | `track_id`, `preset_path` |
+| `set_instrument_param` | Set instrument-specific parameter | `track_id`, `param_path`, `value` |
+| `list_presets` | List available presets for an instrument | `instrument_name`, `category` |
+
+#### Note Entry
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `add_note` | Add a MIDI note | `track_id`, `clip_id`, `pitch`, `velocity`, `position`, `length` |
+| `add_notes_batch` | Add multiple notes at once | `track_id`, `clip_id`, `notes[]` |
+| `remove_notes` | Remove notes in a range | `track_id`, `clip_id`, `start`, `end` |
+| `create_clip` | Create a new clip on a track | `track_id`, `position`, `length` |
+
+#### Effects
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `add_effect` | Add effect to a track's chain | `track_id`, `effect_name`, `position` |
+| `remove_effect` | Remove effect from chain | `track_id`, `effect_index` |
+| `set_effect_param` | Set effect parameter | `track_id`, `effect_index`, `param`, `value` |
+| `set_effect_wet_dry` | Set wet/dry mix | `track_id`, `effect_index`, `value` |
+
+#### Automation
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `add_automation` | Create automation for a parameter | `target_path`, `keyframes[]` |
+| `add_clip_automation` | Add per-clip automation | `track_id`, `clip_id`, `target_path`, `keyframes[]` |
+
+#### Mixer
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `create_mixer_channel` | Create a mixer channel | `name` |
+| `route_track` | Route track to mixer channel | `track_id`, `channel_name` |
+| `set_mixer_param` | Set channel volume/pan | `channel_name`, `param`, `value` |
+| `add_mixer_effect` | Add effect to mixer channel | `channel_name`, `effect_name` |
+
+#### Transport & Export
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `set_bpm` | Set project tempo | `bpm` |
+| `set_time_signature` | Set time signature | `numerator`, `denominator` |
+| `play` | Start playback | `from_position` (optional) |
+| `stop` | Stop playback | — |
+| `export_audio` | Render to audio file | `file_path`, `format`, `sample_rate` |
+
+### Resources (Read-Only Context)
+
+| Resource URI | Description |
+|---|---|
+| `project://state` | Full project state: tracks, instruments, clips, BPM, time signature |
+| `project://track/{id}` | Single track's complete state |
+| `library://presets/{instrument}` | Available presets for an instrument |
+| `library://samples` | Available sample files |
+| `library://plugins` | Installed plugins (internal + external) |
+| `library://templates` | Available track/group templates |
+
+### Prompts (User-Invoked Templates)
+
+| Prompt | Description |
+|---|---|
+| `compose_beat` | "Create a drum pattern with kick, snare, hihat" |
+| `compose_chord_progression` | "Write a chord progression in the key of..." |
+| `create_arrangement` | "Arrange an intro, verse, chorus structure" |
+| `mix_project` | "Set levels and panning for a balanced mix" |
+| `sound_design` | "Create a sound matching this description..." |
+
+### Integration With Template System
+
+The MCP server uses the same symbolic parameter paths as the template format:
+
+```json
+// AI calls set_instrument_param
+{
+  "track_id": "track_001",
+  "param_path": "sound_shaping/filter_cutoff",
+  "value": 2000.0
+}
+
+// AI calls add_clip_automation
+{
+  "track_id": "track_001",
+  "clip_id": "clip_0",
+  "target_path": "track/sound_shaping/filter_cutoff",
+  "keyframes": [
+    { "pos": 0, "value": 5000.0 },
+    { "pos": 384, "value": 800.0 }
+  ]
+}
+```
+
+Same path scheme everywhere: MCP tools, automation, templates. One concept, three use cases.
+
+---
+
+## Factory Content: Instrument Templates & Presets
+
+### Current Inventory
+
+| Category | Count | Format |
+|---|---|---|
+| TripleOscillator presets | 72 | `.xpf` (XML) |
+| ZynAddSubFX presets | 954 | `.xiz` (gzipped XML) |
+| Other instruments (BitInvader, Organic, Kicker, etc.) | 103 | `.xpf` (XML) |
+| Audio samples | 1,005 | `.wav`, `.ogg`, `.flac` |
+| Wavetables | 4 | binary |
+| Project templates | 6 | `.mpt` (XML) |
+| Demo projects | 28 | `.mmp` (XML) |
+| **Total** | **2,172 files** | |
+
+### Preset Schema (Current XML → New JSON)
+
+Current `.xpf` preset (e.g., TB303):
+```xml
+<instrumenttracksettings muted="0" type="0" name="TB303">
+  <instrumenttrack pan="0" mixch="0" pitch="0" basenote="81" vol="59">
+    <instrument name="tripleoscillator">
+      <tripleoscillator wavetype0="2" vol0="100" coarse0="0" finer0="0"
+                        wavetype1="2" vol1="0"   coarse1="0" finer1="0"
+                        wavetype2="2" vol2="0"   coarse2="0" finer2="0"
+                        modalgo1="2" modalgo2="2" modalgo3="0" ... />
+    </instrument>
+    <eldata fres="0.76" ftype="6" fcut="1" fwet="1">
+      <elvol att="0.038" dec="0.279" sus="0" rel="0.112" amt="1" ... />
+      <elcut att="0.062" dec="0.426" sus="0.999" rel="0" amt="1" ... />
+    </eldata>
+    <fxchain numofeffects="0" enabled="0"/>
+  </instrumenttrack>
+</instrumenttracksettings>
+```
+
+New JSON preset equivalent:
+```json
+{
+  "name": "TB303",
+  "instrument": {
+    "plugin": "triple_oscillator",
+    "params": {
+      "osc1": { "wavetype": "saw", "volume": 100, "coarse": 0, "fine": 0, "pan": 0 },
+      "osc2": { "wavetype": "saw", "volume": 0, "coarse": 0, "fine": 0, "pan": 0 },
+      "osc3": { "wavetype": "saw", "volume": 0, "coarse": 0, "fine": 0, "pan": 0 },
+      "modulation": { "osc2_mode": "pm", "osc3_mode": "pm" }
+    }
+  },
+  "sound_shaping": {
+    "filter": { "type": "moog_double_lowpass", "cutoff": 1, "resonance": 0.76, "wet": 1.0 },
+    "envelopes": {
+      "volume": { "attack": 0.038, "decay": 0.279, "sustain": 0, "release": 0.112, "amount": 1.0 },
+      "cutoff": { "attack": 0.062, "decay": 0.426, "sustain": 0.999, "release": 0, "amount": 1.0 }
+    }
+  },
+  "track": { "volume": 59, "panning": 0, "pitch": 0, "base_note": 81 }
+}
+```
+
+### Conversion Strategy
+
+All 1,138 presets will be converted during the build process:
+
+1. **Write a Rust conversion tool** (`lmms-preset-converter`) that reads `.xpf`/`.xiz` XML and emits JSON presets
+2. **Run at build time** — source presets stay as XML in the repo for history; built JSON presets ship with the binary
+3. **Preserve the directory structure** — `data/presets/TripleOscillator/TB303.xpf` → `presets/triple_oscillator/TB303.json`
+4. **Expose via MCP** — the `library://presets/{instrument}` resource lists all available presets; `load_preset` tool applies them
+
+### Presets as MCP-Loadable Resources
+
+When Claude calls `list_presets`:
+```json
+// Request
+{ "instrument_name": "triple_oscillator" }
+
+// Response
+{
+  "presets": [
+    { "name": "TB303", "path": "presets/triple_oscillator/TB303.json", "tags": ["bass", "acid"] },
+    { "name": "SuperSawLead", "path": "presets/triple_oscillator/SuperSawLead.json", "tags": ["lead", "supersaw"] },
+    ...
+  ]
+}
+```
+
+When Claude calls `load_preset`:
+```json
+{ "track_id": "track_001", "preset_path": "presets/triple_oscillator/TB303.json" }
+```
+
+The preset is loaded with all parameters, effect chains, envelope settings — everything. This is the same `.lmms-track` template system, just for presets that come bundled with the DAW.
 
 ---
 

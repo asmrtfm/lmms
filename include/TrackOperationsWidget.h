@@ -61,6 +61,8 @@ private slots:
 	void recordingOn();
 	void recordingOff();
 	void clearTrack();
+	void exportTrackAsTemplate();
+	void importTrackTemplate();
 
 private:
 	TrackView * m_trackView;

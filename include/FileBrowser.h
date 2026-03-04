@@ -274,7 +274,8 @@ public:
 		LoadAsProject,
 		LoadAsPreset,
 		LoadByPlugin,
-		ImportAsProject
+		ImportAsProject,
+		LoadAsTrackBundle
 	} ;
 
 

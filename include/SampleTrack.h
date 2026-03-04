@@ -25,8 +25,7 @@
 #ifndef LMMS_SAMPLE_TRACK_H
 #define LMMS_SAMPLE_TRACK_H
 
-#include "AudioPort.h"
-#include "Track.h"
+#include "AudioTrackBase.h"
 
 
 namespace lmms
@@ -41,7 +40,7 @@ class SampleTrackWindow;
 } // namespace gui
 
 
-class SampleTrack : public Track
+class SampleTrack : public AudioTrackBase
 {
 	Q_OBJECT
 public:
@@ -56,16 +55,6 @@ public:
 
 	void saveTrackSpecificSettings(QDomDocument& doc, QDomElement& parent, bool presetMode) override;
 	void loadTrackSpecificSettings( const QDomElement & _this ) override;
-
-	inline IntModel * mixerChannelModel()
-	{
-		return &m_mixerChannelModel;
-	}
-
-	inline AudioPort * audioPort()
-	{
-		return &m_audioPort;
-	}
 
 	QString nodeName() const override
 	{
@@ -89,16 +78,9 @@ signals:
 public slots:
 	void updateClips();
 	void setPlayingClips( bool isPlaying );
-	void updateMixerChannel();
 
 private:
-	FloatModel m_volumeModel;
-	FloatModel m_panningModel;
-	IntModel m_mixerChannelModel;
-	AudioPort m_audioPort;
 	bool m_isPlaying;
-
-
 
 	friend class gui::SampleTrackView;
 	friend class gui::SampleTrackWindow;

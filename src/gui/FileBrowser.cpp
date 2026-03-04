@@ -52,6 +52,7 @@
 #include "Instrument.h"
 #include "InstrumentTrack.h"
 #include "InstrumentTrackWindow.h"
+#include "TrackBundle.h"
 #include "MainWindow.h"
 #include "PatternStore.h"
 #include "PluginFactory.h"
@@ -914,6 +915,11 @@ void FileBrowserTreeWidget::handleFile(FileItem * f, InstrumentTrack * it)
 							Engine::getSong() );
 			break;
 
+		case FileItem::FileHandling::LoadAsTrackBundle: {
+			TrackBundle::importBundle(f->fullName(), Engine::getSong());
+			break;
+		}
+
 		case FileItem::FileHandling::NotSupported:
 		default:
 			break;
@@ -1207,6 +1213,11 @@ void FileItem::determineFileType()
 		m_type = FileType::Preset;
 		m_handling = FileHandling::LoadAsPreset;
 	}
+	else if( ext == "lmms-track" )
+	{
+		m_type = FileType::Preset;
+		m_handling = FileHandling::LoadAsTrackBundle;
+	}
 	else if( ext == "xiz" && ! getPluginFactory()->pluginSupportingExtension(ext).isNull() )
 	{
 		m_type = FileType::Preset;
@@ -1276,7 +1287,7 @@ QString FileItem::extension(const QString & file )
 QString FileItem::defaultFilters()
 {
 	const auto projectFilters = QStringList{"*.mmp", "*.mpt", "*.mmpz"};
-	const auto presetFilters = QStringList{"*.xpf", "*.xml", "*.xiz", "*.lv2"};
+	const auto presetFilters = QStringList{"*.xpf", "*.xml", "*.xiz", "*.lv2", "*.lmms-track"};
 	const auto soundFontFilters = QStringList{"*.sf2", "*.sf3"};
 	const auto patchFilters = QStringList{"*.pat"};
 	const auto midiFilters = QStringList{"*.mid", "*.midi", "*.rmi"};

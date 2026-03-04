@@ -28,7 +28,7 @@
 
 #include <limits>
 
-#include "AudioPort.h"
+#include "AudioTrackBase.h"
 #include "InstrumentFunctions.h"
 #include "InstrumentSoundShaping.h"
 #include "Microtuner.h"
@@ -38,7 +38,6 @@
 #include "NotePlayHandle.h"
 #include "Piano.h"
 #include "Plugin.h"
-#include "Track.h"
 
 
 namespace lmms
@@ -59,7 +58,7 @@ class MidiCCRackView;
 } // namespace gui
 
 
-class LMMS_EXPORT InstrumentTrack : public Track, public MidiEventProcessor
+class LMMS_EXPORT InstrumentTrack : public AudioTrackBase, public MidiEventProcessor
 {
 	Q_OBJECT
 	mapPropertyFromModel(int,getVolume,setVolume,m_volumeModel);
@@ -144,11 +143,6 @@ public:
 				const Plugin::Descriptor::SubPluginFeatures::Key* key = nullptr,
 				bool keyFromDnd = false);
 
-	AudioPort * audioPort()
-	{
-		return &m_audioPort;
-	}
-
 	MidiPort * midiPort()
 	{
 		return &m_midiPort;
@@ -204,24 +198,9 @@ public:
 		return &m_pitchModel;
 	}
 
-	FloatModel * volumeModel()
-	{
-		return &m_volumeModel;
-	}
-
-	FloatModel * panningModel()
-	{
-		return &m_panningModel;
-	}
-
 	IntModel* pitchRangeModel()
 	{
 		return &m_pitchRangeModel;
-	}
-
-	IntModel * mixerChannelModel()
-	{
-		return &m_mixerChannelModel;
 	}
 
 	BoolModel* useMasterPitchModel()
@@ -261,7 +240,6 @@ protected slots:
 	void updateBaseNote();
 	void updatePitch();
 	void updatePitchRange();
-	void updateMixerChannel();
 
 
 private:
@@ -290,14 +268,8 @@ private:
 
 	NotePlayHandleList m_processHandles;
 
-	FloatModel m_volumeModel;
-	FloatModel m_panningModel;
-
-	AudioPort m_audioPort;
-
 	FloatModel m_pitchModel;
 	IntModel m_pitchRangeModel;
-	IntModel m_mixerChannelModel;
 	BoolModel m_useMasterPitchModel;
 
 	Instrument * m_instrument;

@@ -47,7 +47,7 @@ namespace lmms
 
 
 InstrumentTrack::InstrumentTrack( TrackContainer* tc ) :
-	Track( Track::Type::Instrument, tc ),
+	AudioTrackBase( Track::Type::Instrument, tc, tr( "unnamed_track" ) ),
 	MidiEventProcessor(),
 	m_midiPort( tr( "unnamed_track" ), Engine::audioEngine()->midiClient(),
 								this, this ),
@@ -59,12 +59,8 @@ InstrumentTrack::InstrumentTrack( TrackContainer* tc ) :
 	m_firstKeyModel(0, 0, NumKeys - 1, this, tr("First note")),
 	m_lastKeyModel(0, 0, NumKeys - 1, this, tr("Last note")),
 	m_hasAutoMidiDev( false ),
-	m_volumeModel( DefaultVolume, MinVolume, MaxVolume, 0.1f, this, tr( "Volume" ) ),
-	m_panningModel( DefaultPanning, PanningLeft, PanningRight, 0.1f, this, tr( "Panning" ) ),
-	m_audioPort( tr( "unnamed_track" ), true, &m_volumeModel, &m_panningModel, &m_mutedModel ),
 	m_pitchModel( 0, MinPitchDefault, MaxPitchDefault, 1, this, tr( "Pitch" ) ),
 	m_pitchRangeModel( 1, 1, 60, this, tr( "Pitch range" ) ),
-	m_mixerChannelModel( 0, 0, 0, this, tr( "Mixer channel" ) ),
 	m_useMasterPitchModel( true, this, tr( "Master pitch") ),
 	m_instrument( nullptr ),
 	m_soundShaping( this ),
@@ -75,12 +71,9 @@ InstrumentTrack::InstrumentTrack( TrackContainer* tc ) :
 {
 	m_pitchModel.setCenterValue( 0 );
 	m_pitchModel.setStrictStepSize(true);
-	m_panningModel.setCenterValue( DefaultPanning );
 	m_baseNoteModel.setInitValue( DefaultKey );
 	m_firstKeyModel.setInitValue(0);
 	m_lastKeyModel.setInitValue(NumKeys - 1);
-
-	m_mixerChannelModel.setRange( 0, Engine::mixer()->numChannels()-1, 1);
 
 	for( int i = 0; i < NumKeys; ++i )
 	{
@@ -109,7 +102,6 @@ InstrumentTrack::InstrumentTrack( TrackContainer* tc ) :
 	connect(&m_baseNoteModel, SIGNAL(dataChanged()), this, SLOT(updateBaseNote()), Qt::DirectConnection);
 	connect(&m_pitchModel, SIGNAL(dataChanged()), this, SLOT(updatePitch()), Qt::DirectConnection);
 	connect(&m_pitchRangeModel, SIGNAL(dataChanged()), this, SLOT(updatePitchRange()), Qt::DirectConnection);
-	connect(&m_mixerChannelModel, SIGNAL(dataChanged()), this, SLOT(updateMixerChannel()), Qt::DirectConnection);
 }
 
 
@@ -670,14 +662,6 @@ void InstrumentTrack::updatePitchRange()
 
 
 
-void InstrumentTrack::updateMixerChannel()
-{
-	m_audioPort.setNextMixerChannel( m_mixerChannelModel.value() );
-}
-
-
-
-
 int InstrumentTrack::masterKey( int _midi_key ) const
 {
 
@@ -823,12 +807,9 @@ gui::TrackView* InstrumentTrack::createView( gui::TrackContainerView* tcv )
 
 void InstrumentTrack::saveTrackSpecificSettings(QDomDocument& doc, QDomElement& thisElement, bool presetMode)
 {
-	m_volumeModel.saveSettings( doc, thisElement, "vol" );
-	m_panningModel.saveSettings( doc, thisElement, "pan" );
+	saveAudioSettings(doc, thisElement);
 	m_pitchModel.saveSettings( doc, thisElement, "pitch" );
 	m_pitchRangeModel.saveSettings( doc, thisElement, "pitchrange" );
-
-	m_mixerChannelModel.saveSettings( doc, thisElement, "mixch" );
 	m_baseNoteModel.saveSettings( doc, thisElement, "basenote" );
 	m_firstKeyModel.saveSettings(doc, thisElement, "firstkey");
 	m_lastKeyModel.saveSettings(doc, thisElement, "lastkey");
@@ -893,15 +874,17 @@ void InstrumentTrack::loadTrackSpecificSettings( const QDomElement & thisElement
 
 	lock();
 
+	// Load shared audio settings (volume, panning, mixer channel)
+	// but skip mixer channel in preview mode
 	m_volumeModel.loadSettings( thisElement, "vol" );
 	m_panningModel.loadSettings( thisElement, "pan" );
-	m_pitchRangeModel.loadSettings( thisElement, "pitchrange" );
-	m_pitchModel.loadSettings( thisElement, "pitch" );
 	m_mixerChannelModel.setRange( 0, Engine::mixer()->numChannels()-1 );
 	if ( !m_previewMode )
 	{
 		m_mixerChannelModel.loadSettings( thisElement, "mixch" );
 	}
+	m_pitchRangeModel.loadSettings( thisElement, "pitchrange" );
+	m_pitchModel.loadSettings( thisElement, "pitch" );
 	m_baseNoteModel.loadSettings( thisElement, "basenote" );
 	m_firstKeyModel.loadSettings(thisElement, "firstkey");
 	m_lastKeyModel.loadSettings(thisElement, "lastkey");

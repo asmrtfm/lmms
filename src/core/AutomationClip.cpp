@@ -915,7 +915,10 @@ void AutomationClip::loadSettings( const QDomElement & _this )
 		}
 		else if( element.tagName() == "object" )
 		{
-			m_idsToResolve.push_back(element.attribute("id").toInt());
+			// Convert from save format to runtime format using idFromSave.
+			// This pairs with saveSettings which uses idToSave.
+			m_idsToResolve.push_back(
+				ProjectJournal::idFromSave(element.attribute("id").toInt()));
 		}
 	}
 	
@@ -1078,30 +1081,35 @@ void AutomationClip::resolveAllIDs()
 				{
 					for (const auto& id : a->m_idsToResolve)
 					{
-						JournallingObject* o = Engine::projectJournal()->journallingObject(id);
-						if( o && dynamic_cast<AutomatableModel *>( o ) )
+						// IDs should already be in runtime format (idFromSave applied at load time).
+						// Try direct lookup first, then fall back to legacy interpretations
+						// for backward compatibility with older project files.
+						auto* o = dynamic_cast<AutomatableModel*>(
+							Engine::projectJournal()->journallingObject(id));
+						if (!o)
 						{
-							a->addObject( dynamic_cast<AutomatableModel *>( o ), false );
+							// Legacy fallback: try alternate ID formats for old projects
+							// that were saved before consistent id normalization
+							o = dynamic_cast<AutomatableModel*>(
+								Engine::projectJournal()->journallingObject(
+									ProjectJournal::idFromSave(id)));
+						}
+						if (!o)
+						{
+							o = dynamic_cast<AutomatableModel*>(
+								Engine::projectJournal()->journallingObject(
+									ProjectJournal::idToSave(id)));
+						}
+
+						if (o)
+						{
+							a->addObject(o, false);
 						}
 						else
 						{
-							// FIXME: Remove this block once the automation system gets fixed
-							// This is a temporary fix for https://github.com/LMMS/lmms/issues/3781
-							o = Engine::projectJournal()->journallingObject(ProjectJournal::idFromSave(id));
-							if( o && dynamic_cast<AutomatableModel *>( o ) )
-							{
-								a->addObject( dynamic_cast<AutomatableModel *>( o ), false );
-							}
-							else
-							{
-								// FIXME: Remove this block once the automation system gets fixed
-								// This is a temporary fix for https://github.com/LMMS/lmms/issues/4781
-								o = Engine::projectJournal()->journallingObject(ProjectJournal::idToSave(id));
-								if( o && dynamic_cast<AutomatableModel *>( o ) )
-								{
-									a->addObject( dynamic_cast<AutomatableModel *>( o ), false );
-								}
-							}
+							qWarning("AutomationClip: could not resolve target ID %d "
+							         "for clip '%s'", id,
+							         qPrintable(a->name()));
 						}
 					}
 					a->m_idsToResolve.clear();

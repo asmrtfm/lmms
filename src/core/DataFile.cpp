@@ -115,7 +115,8 @@ namespace
 		TypeDescStruct{ DataFile::Type::ClipboardData, "clipboard-data" },
 		TypeDescStruct{ DataFile::Type::JournalData, "journaldata" },
 		TypeDescStruct{ DataFile::Type::EffectSettings, "effectsettings" },
-		TypeDescStruct{ DataFile::Type::MidiClip, "midiclip" }
+		TypeDescStruct{ DataFile::Type::MidiClip, "midiclip" },
+		TypeDescStruct{ DataFile::Type::TrackBundle, "trackbundle" }
 	};
 }
 

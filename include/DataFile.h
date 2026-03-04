@@ -56,7 +56,8 @@ public:
 		ClipboardData,
 		JournalData,
 		EffectSettings,
-		MidiClip
+		MidiClip,
+		TrackBundle
 	} ;
 
 	DataFile( const QString& fileName );

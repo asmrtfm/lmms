@@ -5,6 +5,7 @@ set(LMMS_SRCS
 	core/AudioEngineProfiler.cpp
 	core/AudioEngineWorkerThread.cpp
 	core/AudioResampler.cpp
+	core/AudioTrackBase.cpp
 	core/AutomatableModel.cpp
 	core/AutomationClip.cpp
 	core/AutomationNode.cpp
@@ -82,6 +83,7 @@ set(LMMS_SRCS
 	core/TimePos.cpp
 	core/ToolPlugin.cpp
 	core/Track.cpp
+	core/TrackBundle.cpp
 	core/TrackContainer.cpp
 	core/UpgradeExtendedNoteRange.h
 	core/UpgradeExtendedNoteRange.cpp

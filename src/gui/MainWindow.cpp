@@ -46,7 +46,9 @@
 #include "Engine.h"
 #include "ExportProjectDialog.h"
 #include "FileBrowser.h"
+#include "DataFile.h"
 #include "FileDialog.h"
+#include "Track.h"
 #include "Metronome.h"
 #include "MixerView.h"
 #include "GuiApplication.h"
@@ -1202,6 +1204,128 @@ void MainWindow::saveProjectAsDefaultTemplate()
 }
 
 
+void MainWindow::saveProjectAsDefaultTemplateNoPatterns()
+{
+	// Determine the default project suffix from config (mmpz or mmp)
+	QString suffix = ConfigManager::inst()->value("app", "nommpz").toInt() == 0 ? "mmpz" : "mmp";
+
+	// Show a save dialog defaulting to the project directory
+	FileDialog sfd(this, tr("Save without patterns"),
+		ConfigManager::inst()->userProjectsDir(),
+		tr("LMMS Project") + " (*.mmpz *.mmp)");
+	sfd.setAcceptMode(FileDialog::AcceptSave);
+	sfd.setFileMode(FileDialog::AnyFile);
+	sfd.setDefaultSuffix(suffix);
+
+	if (sfd.exec() != QDialog::Accepted
+		|| sfd.selectedFiles().isEmpty()
+		|| sfd.selectedFiles().first().isEmpty())
+	{
+		return;
+	}
+
+	QString fname = sfd.selectedFiles().first();
+
+	// Ensure a recognized project extension
+	if (!fname.endsWith(".mmp") && !fname.endsWith(".mmpz"))
+	{
+		fname += "." + suffix;
+	}
+
+	// Check for overwrite and prompt the user
+	if (QFile::exists(fname))
+	{
+		if (QMessageBox::warning(this,
+					 tr("Overwrite file?"),
+					 tr("The file \"%1\" already exists. Overwrite it?").arg(QFileInfo(fname).fileName()),
+					 QMessageBox::Ok,
+					 QMessageBox::Cancel) != QMessageBox::Ok)
+		{
+			return;
+		}
+	}
+
+	// Step 1: Save the full project to the target file
+	Engine::getSong()->saveProjectFile(fname);
+
+	// Step 2: Re-read the saved file as XML DOM for manipulation
+	DataFile dataFile(fname);
+	QDomElement content = dataFile.content();
+
+	// Step 3: Strip pattern data from the XML DOM
+	QDomElement trackContainer = content.firstChildElement("trackcontainer");
+	if (!trackContainer.isNull())
+	{
+		bool firstPatternTrackKept = false;
+		QDomNode node = trackContainer.firstChild();
+		while (!node.isNull())
+		{
+			QDomNode next = node.nextSibling();
+			QDomElement elem = node.toElement();
+			if (!elem.isNull() && elem.tagName() == "track"
+				&& elem.attribute("type").toInt() == static_cast<int>(Track::Type::Pattern))
+			{
+				if (!firstPatternTrackKept)
+				{
+					firstPatternTrackKept = true;
+
+					// Remove PatternClip elements from this track
+					QDomNode trackChild = elem.firstChild();
+					while (!trackChild.isNull())
+					{
+						QDomNode trackChildNext = trackChild.nextSibling();
+						QDomElement trackChildElem = trackChild.toElement();
+						if (!trackChildElem.isNull() && trackChildElem.tagName() == "patternclip")
+						{
+							elem.removeChild(trackChild);
+						}
+						trackChild = trackChildNext;
+					}
+
+					// Inside <patterntrack>, find <trackcontainer> (PatternStore)
+					// and strip clip elements from each instrument track
+					QDomElement patternTrackSettings = elem.firstChildElement("patterntrack");
+					QDomElement patternStoreTC = patternTrackSettings.firstChildElement("trackcontainer");
+					if (!patternStoreTC.isNull())
+					{
+						QDomNode psTrack = patternStoreTC.firstChild();
+						while (!psTrack.isNull())
+						{
+							QDomElement psTrackElem = psTrack.toElement();
+							if (!psTrackElem.isNull() && psTrackElem.tagName() == "track")
+							{
+								static const QStringList clipTagNames = {
+									"midiclip", "sampleclip", "automationclip", "patternclip"
+								};
+								QDomNode clipNode = psTrackElem.firstChild();
+								while (!clipNode.isNull())
+								{
+									QDomNode clipNext = clipNode.nextSibling();
+									QDomElement clipElem = clipNode.toElement();
+									if (!clipElem.isNull() && clipTagNames.contains(clipElem.tagName()))
+									{
+										psTrackElem.removeChild(clipNode);
+									}
+									clipNode = clipNext;
+								}
+							}
+							psTrack = psTrack.nextSibling();
+						}
+					}
+				}
+				else
+				{
+					// Remove all additional PatternTracks beyond the first
+					trackContainer.removeChild(node);
+				}
+			}
+			node = next;
+		}
+	}
+
+	// Step 4: Re-write the file without pattern data
+	dataFile.writeFile(fname);
+}
 
 
 /**

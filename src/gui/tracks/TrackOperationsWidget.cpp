@@ -34,6 +34,13 @@
 #include <QDir>
 #include <QLabel>
 #include <QMenu>
+#include <cstdio>
+
+#include <QBoxLayout>
+#include <QCheckBox>
+#include <QDialogButtonBox>
+#include <QDir>
+#include <QLabel>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
@@ -546,6 +553,12 @@ void TrackOperationsWidget::updateMenu()
 		toMenu->addAction( tr( "Turn all recording on" ), this, SLOT(recordingOn()));
 		toMenu->addAction( tr( "Turn all recording off" ), this, SLOT(recordingOff()));
 	}
+	if (dynamic_cast<PatternTrackView*>(m_trackView))
+	{
+		toMenu->addSeparator();
+		toMenu->addAction(tr("Export patterns..."), this, SLOT(exportPattern()));
+		toMenu->addAction(tr("Import patterns..."), this, SLOT(importPattern()));
+	}
 
 	toMenu->addSeparator();
 
@@ -617,6 +630,7 @@ void TrackOperationsWidget::recordingOff()
 // =========================================================================
 // Pattern Export / Import (.xppt files)
 // =========================================================================
+
 
 void TrackOperationsWidget::exportPattern()
 {

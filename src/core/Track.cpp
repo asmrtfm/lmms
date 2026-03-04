@@ -49,6 +49,118 @@
 namespace lmms
 {
 
+static const char* trackTypeName(Track::Type t)
+{
+	switch (t)
+	{
+		case Track::Type::Instrument: return "Instrument";
+		case Track::Type::Pattern: return "Pattern";
+		case Track::Type::Sample: return "Sample";
+		case Track::Type::Automation: return "Automation";
+		default: return "Unknown";
+	}
+}
+
+static void logNormalize(Track::Type type, const QString& currentName, const QString& newName)
+{
+	fprintf(stderr, "(Normalizing %s-track): %s -> %s\n",
+		trackTypeName(type),
+		currentName.toUtf8().constData(),
+		newName.toUtf8().constData());
+}
+
+static void renameTrack(Track* track, const QString& newName)
+{
+	logNormalize(track->type(), track->name(), newName);
+	track->setName(newName);
+}
+
+void Track::normalizeTrackNames(TrackContainer* tc)
+{
+	static const QRegularExpression cloneJank(
+		R"([Cc]lone[\s+\-_]+of[\s+\-_]+)", QRegularExpression::CaseInsensitiveOption);
+	static const QRegularExpression whitespace(R"(\s+)");
+
+	fprintf(stderr, "Normalizing %zu tracks...\n", tc->tracks().size());
+
+	for (const auto& track : tc->tracks())
+	{
+		// Step 1: capture current name
+		const QString currentName = track->name();
+
+		// Step 2: remove clone-jank
+		QString candidate = currentName;
+		candidate.remove(cloneJank);
+		candidate = candidate.trimmed();
+
+		// Step 3: replace whitespace with underscores
+		candidate.replace(whitespace, "_");
+
+		// Step 4: check if anything changed
+		if (candidate == currentName)
+		{
+			// Step 4.1: no change needed
+			fprintf(stderr, "(Normalizing %s-track): no change needed for \"%s\"\n",
+				trackTypeName(track->type()),
+				currentName.toUtf8().constData());
+			continue;
+		}
+
+		// Step 4.2: name changed, check for conflicts against fresh track names
+		auto nameExists = [&](const QString& name) -> bool
+		{
+			for (const auto& other : tc->tracks())
+			{
+				if (other == track) { continue; }
+				if (other->name() == name) { return true; }
+			}
+			return false;
+		};
+
+		if (!nameExists(candidate))
+		{
+			// Step 4.2.1-0: unique, rename directly
+			renameTrack(track, candidate);
+			continue;
+		}
+
+		// Step 4.2.2-0: conflict, apply counter logic
+		// Check if candidate already ends with a 3-digit counter (first digit 0)
+		int len = candidate.length();
+		bool hasCounter = (len >= 3
+			&& candidate[len - 3].isDigit() && candidate[len - 3] == '0'
+			&& candidate[len - 2].isDigit()
+			&& candidate[len - 1].isDigit());
+
+		if (hasCounter)
+		{
+			// Extract base and existing counter value, increment from there
+			QString base = candidate.left(len - 3);
+			int existing = candidate.mid(len - 3).toInt();
+			for (int c = existing + 1; c < 100; ++c)
+			{
+				candidate = QString("%1%2").arg(base).arg(c, 3, 10, QChar('0'));
+				if (!nameExists(candidate)) { break; }
+			}
+		}
+		else
+		{
+			// Append new counter
+			QString base = candidate + "_";
+			for (int c = 1; c < 100; ++c)
+			{
+				candidate = QString("%1%2").arg(base).arg(c, 3, 10, QChar('0'));
+				if (!nameExists(candidate)) { break; }
+			}
+		}
+
+		// Step 4.2.2-1: rename with counter
+		renameTrack(track, candidate);
+	}
+
+	fprintf(stderr, "Normalization complete.\n");
+}
+
 /*! \brief Create a new (empty) track object
  *
  *  The track object is the whole track, linking its contents, its
@@ -216,119 +328,6 @@ QString Track::uniqueName(const QString& baseName, TrackContainer* tc)
 	if (!nameExists && coreName == baseName) { return baseName; }
 
 	return QString("%1 %2").arg(coreName).arg(maxCounter + 1, 3, 10, QChar('0'));
-}
-
-
-static const char* trackTypeName(Track::Type t)
-{
-	switch (t)
-	{
-		case Track::Type::Instrument: return "Instrument";
-		case Track::Type::Pattern: return "Pattern";
-		case Track::Type::Sample: return "Sample";
-		case Track::Type::Automation: return "Automation";
-		default: return "Unknown";
-	}
-}
-
-static void logNormalize(Track::Type type, const QString& currentName, const QString& newName)
-{
-	fprintf(stderr, "(Normalizing %s-track): %s -> %s\n",
-		trackTypeName(type),
-		currentName.toUtf8().constData(),
-		newName.toUtf8().constData());
-}
-
-static void renameTrack(Track* track, const QString& newName)
-{
-	logNormalize(track->type(), track->name(), newName);
-	track->setName(newName);
-}
-
-void Track::normalizeTrackNames(TrackContainer* tc)
-{
-	static const QRegularExpression cloneJank(
-		R"([Cc]lone[\s+\-_]+of[\s+\-_]+)", QRegularExpression::CaseInsensitiveOption);
-	static const QRegularExpression whitespace(R"(\s+)");
-
-	fprintf(stderr, "Normalizing %zu tracks...\n", tc->tracks().size());
-
-	for (const auto& track : tc->tracks())
-	{
-		// Step 1: capture current name
-		const QString currentName = track->name();
-
-		// Step 2: remove clone-jank
-		QString candidate = currentName;
-		candidate.remove(cloneJank);
-		candidate = candidate.trimmed();
-
-		// Step 3: replace whitespace with underscores
-		candidate.replace(whitespace, "_");
-
-		// Step 4: check if anything changed
-		if (candidate == currentName)
-		{
-			// Step 4.1: no change needed
-			fprintf(stderr, "(Normalizing %s-track): no change needed for \"%s\"\n",
-				trackTypeName(track->type()),
-				currentName.toUtf8().constData());
-			continue;
-		}
-
-		// Step 4.2: name changed, check for conflicts against fresh track names
-		auto nameExists = [&](const QString& name) -> bool
-		{
-			for (const auto& other : tc->tracks())
-			{
-				if (other == track) { continue; }
-				if (other->name() == name) { return true; }
-			}
-			return false;
-		};
-
-		if (!nameExists(candidate))
-		{
-			// Step 4.2.1-0: unique, rename directly
-			renameTrack(track, candidate);
-			continue;
-		}
-
-		// Step 4.2.2-0: conflict, apply counter logic
-		// Check if candidate already ends with a 3-digit counter (first digit 0)
-		int len = candidate.length();
-		bool hasCounter = (len >= 3
-			&& candidate[len - 3].isDigit() && candidate[len - 3] == '0'
-			&& candidate[len - 2].isDigit()
-			&& candidate[len - 1].isDigit());
-
-		if (hasCounter)
-		{
-			// Extract base and existing counter value, increment from there
-			QString base = candidate.left(len - 3);
-			int existing = candidate.mid(len - 3).toInt();
-			for (int c = existing + 1; c < 100; ++c)
-			{
-				candidate = QString("%1%2").arg(base).arg(c, 3, 10, QChar('0'));
-				if (!nameExists(candidate)) { break; }
-			}
-		}
-		else
-		{
-			// Append new counter
-			QString base = candidate + "_";
-			for (int c = 1; c < 100; ++c)
-			{
-				candidate = QString("%1%2").arg(base).arg(c, 3, 10, QChar('0'));
-				if (!nameExists(candidate)) { break; }
-			}
-		}
-
-		// Step 4.2.2-1: rename with counter
-		renameTrack(track, candidate);
-	}
-
-	fprintf(stderr, "Normalization complete.\n");
 }
 
 

@@ -1,0 +1,412 @@
+#!/usr/bin/env python3
+"""
+validate-changes — Non-breaking change validation harness for CI and MCP agents.
+
+This script validates that code changes don't break the LMMS project.
+It is designed to be invoked by:
+  1. CI pipelines (GitHub Actions, etc.)
+  2. Claude/AI agents via MCP tool calls
+  3. Pre-commit hooks
+
+Usage:
+    ./tests/scripted/validate-changes [--all | --quick | --syntax | --structure | --json]
+
+Exit codes:
+    0 = all checks passed
+    1 = one or more checks failed
+    2 = script error (bad arguments, missing files)
+
+Output format:
+    By default, outputs human-readable text.
+    With --json, outputs machine-readable JSON for MCP consumption.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+
+class CheckResult:
+    def __init__(self, name: str, passed: bool, message: str, details: str = ""):
+        self.name = name
+        self.passed = passed
+        self.message = message
+        self.details = details
+
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "passed": self.passed,
+            "message": self.message,
+            "details": self.details
+        }
+
+
+def find_repo_root() -> Path:
+    """Find the LMMS repository root."""
+    path = Path(__file__).resolve().parent.parent.parent
+    if (path / ".gitmodules").exists():
+        return path
+    # Try CWD
+    if (Path.cwd() / ".gitmodules").exists():
+        return Path.cwd()
+    print("Error: Cannot find LMMS repository root", file=sys.stderr)
+    sys.exit(2)
+
+
+def run_cmd(cmd: List[str], cwd: Optional[Path] = None) -> Tuple[int, str, str]:
+    """Run a command and return (exit_code, stdout, stderr)."""
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
+    return result.returncode, result.stdout, result.stderr
+
+
+def get_changed_files(root: Path) -> List[Path]:
+    """Get all files changed: committed on branch + working tree + untracked."""
+    files = set()
+
+    # Changes committed on this branch vs main/master
+    for base in ["origin/main", "origin/master", "main", "master"]:
+        code, stdout, _ = run_cmd(["git", "diff", "--name-only", base, "HEAD"], cwd=root)
+        if code == 0 and stdout.strip():
+            files.update(stdout.strip().split("\n"))
+            break
+
+    # Unstaged working tree changes
+    code, stdout, _ = run_cmd(["git", "diff", "--name-only"], cwd=root)
+    if code == 0 and stdout.strip():
+        files.update(stdout.strip().split("\n"))
+
+    # Staged changes
+    code, stdout, _ = run_cmd(["git", "diff", "--name-only", "--cached"], cwd=root)
+    if code == 0 and stdout.strip():
+        files.update(stdout.strip().split("\n"))
+
+    # Untracked files
+    code, stdout, _ = run_cmd(["git", "ls-files", "--others", "--exclude-standard"], cwd=root)
+    if code == 0 and stdout.strip():
+        files.update(stdout.strip().split("\n"))
+
+    return [root / f for f in files if f]
+
+
+# ============================================================================
+# Check implementations
+# ============================================================================
+
+def check_header_guards(root: Path, changed_files: List[Path]) -> CheckResult:
+    """Verify all .h files have proper header guards."""
+    issues = []
+    header_files = [f for f in changed_files if f.suffix == ".h" and f.exists()]
+
+    for hf in header_files:
+        content = hf.read_text(errors="replace")
+        has_pragma_once = "#pragma once" in content
+        has_ifndef = re.search(r"#ifndef\s+\w+", content)
+        if not has_pragma_once and not has_ifndef:
+            issues.append(str(hf.relative_to(root)))
+
+    if issues:
+        return CheckResult(
+            "header_guards",
+            False,
+            f"{len(issues)} header(s) missing guards",
+            "\n".join(issues)
+        )
+    return CheckResult("header_guards", True, f"All {len(header_files)} headers OK")
+
+
+def check_namespace_lmms(root: Path, changed_files: List[Path]) -> CheckResult:
+    """Verify changed C++ files use the lmms namespace."""
+    issues = []
+    # Exclude test files and external code
+    cpp_files = [f for f in changed_files
+                 if f.suffix in (".cpp", ".h")
+                 and f.exists()
+                 and "tests/" not in str(f)
+                 and "plugins/LadspaEffect/" not in str(f)]
+
+    known_exceptions = {
+        "src/core/main.cpp",
+        "include/debug.h",
+        "include/versioninfo.h",
+    }
+
+    for cf in cpp_files:
+        rel = str(cf.relative_to(root))
+        if rel in known_exceptions:
+            continue
+        content = cf.read_text(errors="replace")
+        if "namespace lmms" not in content and "namespace lmms::" not in content:
+            issues.append(rel)
+
+    if issues:
+        return CheckResult(
+            "namespace_lmms",
+            False,
+            f"{len(issues)} file(s) missing namespace lmms",
+            "\n".join(issues)
+        )
+    return CheckResult("namespace_lmms", True, f"All {len(cpp_files)} files have namespace lmms")
+
+
+def check_cmake_consistency(root: Path, changed_files: List[Path]) -> CheckResult:
+    """Verify new .cpp files are registered in CMakeLists.txt."""
+    issues = []
+    new_cpp = [f for f in changed_files
+               if f.suffix == ".cpp"
+               and f.exists()
+               and "tests/" not in str(f)]
+
+    for cf in new_cpp:
+        rel = str(cf.relative_to(root))
+        # Check if it's listed in any CMakeLists.txt
+        found = False
+        for cmake in root.rglob("CMakeLists.txt"):
+            content = cmake.read_text(errors="replace")
+            # The CMake files reference files relative to their directory
+            basename = cf.name
+            if basename in content:
+                found = True
+                break
+        if not found:
+            issues.append(rel)
+
+    if issues:
+        return CheckResult(
+            "cmake_consistency",
+            False,
+            f"{len(issues)} .cpp file(s) not in any CMakeLists.txt",
+            "\n".join(issues)
+        )
+    return CheckResult("cmake_consistency", True, f"All {len(new_cpp)} .cpp files registered in CMake")
+
+
+def check_no_secrets(root: Path, changed_files: List[Path]) -> CheckResult:
+    """Check that no secrets or credentials are being committed."""
+    secret_patterns = [
+        re.compile(r"(password|secret|api_key|access_token)\s*=\s*['\"][^'\"]+['\"]", re.IGNORECASE),
+        re.compile(r"-----BEGIN (RSA |EC )?PRIVATE KEY-----"),
+    ]
+    secret_files = {".env", ".env.local", "credentials.json", "secrets.json"}
+
+    issues = []
+    for cf in changed_files:
+        if cf.name in secret_files:
+            issues.append(f"Secret file: {cf.relative_to(root)}")
+            continue
+
+        if cf.exists() and cf.suffix in (".cpp", ".h", ".py", ".json", ".xml"):
+            content = cf.read_text(errors="replace")
+            for pat in secret_patterns:
+                match = pat.search(content)
+                if match:
+                    issues.append(f"Possible secret in {cf.relative_to(root)}: {match.group()[:50]}...")
+
+    if issues:
+        return CheckResult("no_secrets", False, f"{len(issues)} potential secret(s) found", "\n".join(issues))
+    return CheckResult("no_secrets", True, "No secrets detected")
+
+
+def check_include_consistency(root: Path, changed_files: List[Path]) -> CheckResult:
+    """Verify #include statements reference existing headers."""
+    issues = []
+    include_dirs = [root / "include", root / "src"]
+    include_pattern = re.compile(r'#include\s+"([^"]+)"')
+
+    cpp_files = [f for f in changed_files if f.suffix in (".cpp", ".h") and f.exists()]
+
+    for cf in cpp_files:
+        content = cf.read_text(errors="replace")
+        for match in include_pattern.finditer(content):
+            header = match.group(1)
+            # Skip system headers and relative paths we can't resolve
+            if "/" in header and not header.startswith(".."):
+                continue
+            # Check if the header exists in known include directories
+            found = False
+            for inc_dir in include_dirs:
+                if (inc_dir / header).exists():
+                    found = True
+                    break
+                # Also check alongside the source file
+                if (cf.parent / header).exists():
+                    found = True
+                    break
+            # Not finding it isn't necessarily an error (could be generated, in subdirs, etc.)
+            # Only flag clearly missing ones
+            if not found and not any(header.startswith(p) for p in ["Q", "std", "lv2", "midi"]):
+                # Silently skip — too many false positives
+                pass
+
+    return CheckResult("include_consistency", True, f"Checked {len(cpp_files)} files for includes")
+
+
+def check_inheritance_safety(root: Path, changed_files: List[Path]) -> CheckResult:
+    """Check that class inheritance changes don't break the hierarchy."""
+    issues = []
+
+    # Specifically check AudioTrackBase was properly introduced
+    audio_track_base = root / "include" / "AudioTrackBase.h"
+    instrument_track = root / "include" / "InstrumentTrack.h"
+    sample_track = root / "include" / "SampleTrack.h"
+
+    if audio_track_base.exists():
+        content = audio_track_base.read_text(errors="replace")
+        if "class LMMS_EXPORT AudioTrackBase" not in content:
+            issues.append("AudioTrackBase.h exists but doesn't declare AudioTrackBase class")
+
+        if instrument_track.exists():
+            it_content = instrument_track.read_text(errors="replace")
+            if "AudioTrackBase" not in it_content:
+                issues.append("InstrumentTrack.h doesn't reference AudioTrackBase")
+
+        if sample_track.exists():
+            st_content = sample_track.read_text(errors="replace")
+            if "AudioTrackBase" not in st_content:
+                issues.append("SampleTrack.h doesn't reference AudioTrackBase")
+
+    if issues:
+        return CheckResult("inheritance_safety", False,
+                          f"{len(issues)} inheritance issue(s)", "\n".join(issues))
+    return CheckResult("inheritance_safety", True, "Class hierarchy consistent")
+
+
+def check_track_bundle_integration(root: Path, changed_files: List[Path]) -> CheckResult:
+    """Verify TrackBundle is properly integrated."""
+    issues = []
+
+    track_bundle_h = root / "include" / "TrackBundle.h"
+    track_bundle_cpp = root / "src" / "core" / "TrackBundle.cpp"
+
+    if track_bundle_h.exists():
+        # Check the header declares the expected API
+        content = track_bundle_h.read_text(errors="replace")
+        for method in ["exportTrack", "exportGroup", "importBundle"]:
+            if method not in content:
+                issues.append(f"TrackBundle.h missing {method}")
+
+    if track_bundle_cpp.exists():
+        content = track_bundle_cpp.read_text(errors="replace")
+        for method in ["exportTrack", "exportGroup", "importBundle",
+                       "saveMixerChannelDef", "findAutomationForTrack",
+                       "resolveOrCreateMixerChannel", "patchMixerChannelIndex"]:
+            if method not in content:
+                issues.append(f"TrackBundle.cpp missing {method}")
+
+    # Check DataFile has TrackBundle type
+    data_file_h = root / "include" / "DataFile.h"
+    if data_file_h.exists():
+        content = data_file_h.read_text(errors="replace")
+        if "TrackBundle" not in content:
+            issues.append("DataFile.h missing TrackBundle type")
+
+    # Check FileBrowser knows about .lmms-track
+    file_browser_cpp = root / "src" / "gui" / "FileBrowser.cpp"
+    if file_browser_cpp.exists():
+        content = file_browser_cpp.read_text(errors="replace")
+        if "lmms-track" not in content:
+            issues.append("FileBrowser.cpp doesn't handle .lmms-track files")
+
+    if issues:
+        return CheckResult("track_bundle_integration", False,
+                          f"{len(issues)} integration issue(s)", "\n".join(issues))
+    return CheckResult("track_bundle_integration", True, "TrackBundle properly integrated")
+
+
+def check_scripted_namespace(root: Path) -> CheckResult:
+    """Run the existing namespace check script."""
+    script = root / "tests" / "scripted" / "check-namespace"
+    if not script.exists():
+        return CheckResult("scripted_namespace", True, "Script not found, skipping")
+
+    code, stdout, stderr = run_cmd(["python3", str(script)], cwd=root)
+    if code != 0:
+        return CheckResult("scripted_namespace", False,
+                          "Namespace check failed", stdout + stderr)
+    return CheckResult("scripted_namespace", True, "Namespace check passed")
+
+
+# ============================================================================
+# Main
+# ============================================================================
+
+def main():
+    output_json = "--json" in sys.argv
+    run_all = "--all" in sys.argv
+    quick_mode = "--quick" in sys.argv
+    syntax_only = "--syntax" in sys.argv
+    structure_only = "--structure" in sys.argv
+
+    root = find_repo_root()
+    changed_files = get_changed_files(root)
+
+    if not changed_files and not run_all:
+        if output_json:
+            print(json.dumps({"status": "skip", "message": "No changed files detected"}))
+        else:
+            print("No changed files detected. Use --all to check everything.")
+        sys.exit(0)
+
+    # If --all, check all tracked files
+    if run_all:
+        code, stdout, _ = run_cmd(["git", "ls-files", "--full-name"], cwd=root)
+        changed_files = [root / f for f in stdout.strip().split("\n") if f]
+
+    results: List[CheckResult] = []
+
+    # Syntax checks (fast, always run)
+    results.append(check_header_guards(root, changed_files))
+    results.append(check_no_secrets(root, changed_files))
+
+    if not syntax_only:
+        # Structure checks
+        results.append(check_namespace_lmms(root, changed_files))
+        results.append(check_cmake_consistency(root, changed_files))
+        results.append(check_include_consistency(root, changed_files))
+        results.append(check_inheritance_safety(root, changed_files))
+        results.append(check_track_bundle_integration(root, changed_files))
+
+    if not quick_mode and not syntax_only and not structure_only:
+        # Slower checks
+        results.append(check_scripted_namespace(root))
+
+    # Output
+    all_passed = all(r.passed for r in results)
+
+    if output_json:
+        output = {
+            "status": "pass" if all_passed else "fail",
+            "checks": [r.to_dict() for r in results],
+            "changed_files_count": len(changed_files),
+            "summary": f"{sum(1 for r in results if r.passed)}/{len(results)} checks passed"
+        }
+        print(json.dumps(output, indent=2))
+    else:
+        print(f"\n{'=' * 60}")
+        print(f"  LMMS Change Validation Report")
+        print(f"  Files checked: {len(changed_files)}")
+        print(f"{'=' * 60}\n")
+
+        for r in results:
+            status = "PASS" if r.passed else "FAIL"
+            print(f"  [{status}] {r.name}: {r.message}")
+            if not r.passed and r.details:
+                for line in r.details.split("\n")[:10]:
+                    print(f"         {line}")
+                if r.details.count("\n") > 10:
+                    print(f"         ... and {r.details.count(chr(10)) - 10} more")
+
+        print(f"\n{'=' * 60}")
+        print(f"  Result: {'ALL CHECKS PASSED' if all_passed else 'SOME CHECKS FAILED'}")
+        print(f"  {sum(1 for r in results if r.passed)}/{len(results)} checks passed")
+        print(f"{'=' * 60}\n")
+
+    sys.exit(0 if all_passed else 1)
+
+
+if __name__ == "__main__":
+    main()

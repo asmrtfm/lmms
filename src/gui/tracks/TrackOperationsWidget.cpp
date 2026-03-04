@@ -24,6 +24,7 @@
 
 #include "TrackOperationsWidget.h"
 
+#include <QFileDialog>
 #include <QMenu>
 #include <cstdio>
 
@@ -60,6 +61,7 @@
 #include "Song.h"
 #include "StringPairDrag.h"
 #include "Track.h"
+#include "TrackBundle.h"
 #include "TrackContainerView.h"
 #include "TrackView.h"
 
@@ -374,6 +376,18 @@ void TrackOperationsWidget::updateMenu()
 
 	toMenu->addSeparator();
 
+	// Track template export/import
+	if (m_trackView->getTrack()->type() == Track::Type::Instrument
+		|| m_trackView->getTrack()->type() == Track::Type::Sample)
+	{
+		toMenu->addAction(tr("Export track as template..."),
+		                  this, SLOT(exportTrackAsTemplate()));
+	}
+	toMenu->addAction(tr("Import track template..."),
+	                  this, SLOT(importTrackTemplate()));
+
+	toMenu->addSeparator();
+
 	QMenu* colorMenu = toMenu->addMenu(tr("Track color"));
 	colorMenu->setIcon(embed::getIconPixmap("colorize"));
 	colorMenu->addAction(tr("Change"), this, SLOT(selectTrackColor()));
@@ -412,6 +426,47 @@ void TrackOperationsWidget::recordingOff()
 }
 
 
+void TrackOperationsWidget::exportTrackAsTemplate()
+{
+	QString fileName = QFileDialog::getSaveFileName(this,
+		tr("Export Track Template"),
+		QString(),
+		tr("LMMS Track Bundle (*.lmms-track)"));
+
+	if (fileName.isEmpty()) { return; }
+
+	if (!fileName.endsWith(".lmms-track"))
+	{
+		fileName += ".lmms-track";
+	}
+
+	if (!TrackBundle::exportTrack(m_trackView->getTrack(), fileName))
+	{
+		QMessageBox::warning(this, tr("Export Failed"),
+			tr("Could not export track template."));
+	}
+}
+
+
+void TrackOperationsWidget::importTrackTemplate()
+{
+	QString fileName = QFileDialog::getOpenFileName(this,
+		tr("Import Track Template"),
+		QString(),
+		tr("LMMS Track Bundle (*.lmms-track)"));
+
+	if (fileName.isEmpty()) { return; }
+
+	Engine::audioEngine()->requestChangeInModel();
+	auto tracks = TrackBundle::importBundle(fileName,
+		m_trackView->getTrack()->trackContainer());
+	Engine::audioEngine()->doneChangeInModel();
+
+	if (tracks.isEmpty())
+	{
+		QMessageBox::warning(this, tr("Import Failed"),
+			tr("Could not import track template."));
+	}
 void TrackOperationsWidget::exportPattern()
 {
 	auto patternTrack = dynamic_cast<PatternTrack*>(m_trackView->getTrack());

@@ -22,14 +22,13 @@
  * Boston, MA 02110-1301 USA.
  *
  */
- 
+
 #include "SampleTrack.h"
 
 #include <QDomElement>
 
 #include "EffectChain.h"
 #include "Mixer.h"
-#include "panning_constants.h"
 #include "PatternStore.h"
 #include "PatternTrack.h"
 #include "SampleClip.h"
@@ -37,7 +36,6 @@
 #include "SampleRecordHandle.h"
 #include "SampleTrackView.h"
 #include "Song.h"
-#include "volume.h"
 
 
 namespace lmms
@@ -45,18 +43,10 @@ namespace lmms
 
 
 SampleTrack::SampleTrack(TrackContainer* tc) :
-	Track(Track::Type::Sample, tc),
-	m_volumeModel(DefaultVolume, MinVolume, MaxVolume, 0.1f, this, tr("Volume")),
-	m_panningModel(DefaultPanning, PanningLeft, PanningRight, 0.1f, this, tr("Panning")),
-	m_mixerChannelModel(0, 0, 0, this, tr("Mixer channel")),
-	m_audioPort(tr("Sample track"), true, &m_volumeModel, &m_panningModel, &m_mutedModel),
+	AudioTrackBase(Track::Type::Sample, tc, tr("Sample track")),
 	m_isPlaying(false)
 {
 	setName(tr("Sample track"));
-	m_panningModel.setCenterValue(DefaultPanning);
-	m_mixerChannelModel.setRange(0, Engine::mixer()->numChannels()-1, 1);
-
-	connect(&m_mixerChannelModel, SIGNAL(dataChanged()), this, SLOT(updateMixerChannel()));
 }
 
 
@@ -191,12 +181,7 @@ Clip * SampleTrack::createClip(const TimePos & pos)
 void SampleTrack::saveTrackSpecificSettings(QDomDocument& _doc, QDomElement& _this, bool presetMode)
 {
 	m_audioPort.effects()->saveState( _doc, _this );
-#if 0
-	_this.setAttribute( "icon", tlb->pixmapFile() );
-#endif
-	m_volumeModel.saveSettings( _doc, _this, "vol" );
-	m_panningModel.saveSettings( _doc, _this, "pan" );
-	m_mixerChannelModel.saveSettings( _doc, _this, "mixch" );
+	saveAudioSettings(_doc, _this);
 }
 
 
@@ -217,10 +202,7 @@ void SampleTrack::loadTrackSpecificSettings( const QDomElement & _this )
 		}
 		node = node.nextSibling();
 	}
-	m_volumeModel.loadSettings( _this, "vol" );
-	m_panningModel.loadSettings( _this, "pan" );
-	m_mixerChannelModel.setRange( 0, Engine::mixer()->numChannels() - 1 );
-	m_mixerChannelModel.loadSettings( _this, "mixch" );
+	loadAudioSettings(_this);
 }
 
 
@@ -243,14 +225,6 @@ void SampleTrack::setPlayingClips( bool isPlaying )
 		auto sClip = dynamic_cast<SampleClip*>(clip);
 		sClip->setIsPlaying( isPlaying );
 	}
-}
-
-
-
-
-void SampleTrack::updateMixerChannel()
-{
-	m_audioPort.setNextMixerChannel( m_mixerChannelModel.value() );
 }
 
 

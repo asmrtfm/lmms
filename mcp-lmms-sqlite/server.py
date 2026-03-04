@@ -69,12 +69,35 @@ def get_catalog():
 
 @contextmanager
 def open_project(db_path: str):
-    """Open a .lmms-db project file for reading/writing."""
+    """Open a .lmms-db project file for reading/writing.
+
+    If given a .mmp or .mmpz file, auto-converts to .lmms-db first using
+    tools/lmms_convert.py, then opens the converted database.
+    """
     p = Path(db_path)
     if not p.exists():
-        raise FileNotFoundError(f"Project database not found: {db_path}")
-    if not p.suffix == ".lmms-db":
-        raise ValueError(f"Expected .lmms-db file, got: {p.suffix}")
+        raise FileNotFoundError(f"Project file not found: {db_path}")
+
+    # Auto-convert .mmp/.mmpz to .lmms-db
+    if p.suffix in (".mmp", ".mmpz"):
+        converted = p.with_suffix(".lmms-db")
+        if not converted.exists():
+            convert_script = TOOLS_DIR / "lmms_convert.py"
+            if not convert_script.exists():
+                raise FileNotFoundError(
+                    f"lmms_convert.py not found at {convert_script}. "
+                    "Cannot auto-convert .mmp files without it."
+                )
+            result = subprocess.run(
+                ["python3", str(convert_script), db_path, str(converted)],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode != 0:
+                raise ValueError(f"Auto-conversion failed: {result.stderr[:500]}")
+        db_path = str(converted)
+    elif p.suffix != ".lmms-db":
+        raise ValueError(f"Expected .lmms-db, .mmp, or .mmpz file, got: {p.suffix}")
+
     with _open_db(db_path) as conn:
         yield conn
 
@@ -1422,6 +1445,47 @@ _INSTRUMENT_TRACK_DEPS = [
 ]
 
 
+def _extract_mixer_channel(conn: sqlite3.Connection, channel_id: int) -> dict | None:
+    """Extract a mixer channel with its effects and routes."""
+    channel = conn.execute(
+        "SELECT * FROM mixer_channel WHERE id = ?", (channel_id,)
+    ).fetchone()
+    if channel is None:
+        return None
+    channel_data = _row_to_dict(channel)
+    # Effects on this mixer channel
+    effects = conn.execute(
+        "SELECT * FROM effect WHERE owner_type = 'mixer_channel' AND owner_id = ? ORDER BY sort_order",
+        (channel_id,),
+    ).fetchall()
+    channel_data["effects"] = _rows_to_list(effects)
+    # Outgoing routes (sends from this channel)
+    routes = conn.execute(
+        "SELECT * FROM mixer_route WHERE from_channel_id = ?", (channel_id,)
+    ).fetchall()
+    channel_data["routes_out"] = _rows_to_list(routes)
+    return channel_data
+
+
+def _extract_controllers_for_track(
+    conn: sqlite3.Connection, owner_type: str, owner_id: int
+) -> list[dict]:
+    """Extract controller connections and their controllers for a track."""
+    connections = conn.execute(
+        "SELECT * FROM controller_connection WHERE owner_type = ? AND owner_id = ?",
+        (owner_type, owner_id),
+    ).fetchall()
+    result = []
+    for cc in connections:
+        cc_dict = dict(cc)
+        controller = conn.execute(
+            "SELECT * FROM controller WHERE id = ?", (cc["controller_id"],)
+        ).fetchone()
+        cc_dict["controller"] = _row_to_dict(controller)
+        result.append(cc_dict)
+    return result
+
+
 def _extract_instrument_track(conn: sqlite3.Connection, track_id: int) -> dict:
     """Extract a complete instrument track with all associated data."""
     track = conn.execute(
@@ -1461,11 +1525,21 @@ def _extract_instrument_track(conn: sqlite3.Connection, track_id: int) -> dict:
         (track_id,),
     ).fetchall()
 
+    # Mixer channel (preserves routing)
+    mixer_channel = None
+    if track_data.get("mixer_channel_id") is not None:
+        mixer_channel = _extract_mixer_channel(conn, track_data["mixer_channel_id"])
+
+    # Controller connections
+    controllers = _extract_controllers_for_track(conn, "instrument_track", track_id)
+
     return {
         "type": "instrument_track",
         "track": track_data,
         "midi_clips": clips_data,
         "effects": _rows_to_list(effects),
+        "mixer_channel": mixer_channel,
+        "controller_connections": controllers,
     }
 
 
@@ -1477,6 +1551,8 @@ def _extract_sample_track(conn: sqlite3.Connection, track_id: int) -> dict:
     if track is None:
         raise ValueError(f"Sample track {track_id} not found")
 
+    track_data = _row_to_dict(track)
+
     clips = conn.execute(
         "SELECT * FROM sample_clip WHERE sample_track_id = ?", (track_id,)
     ).fetchall()
@@ -1486,11 +1562,47 @@ def _extract_sample_track(conn: sqlite3.Connection, track_id: int) -> dict:
         (track_id,),
     ).fetchall()
 
+    # Mixer channel (preserves routing)
+    mixer_channel = None
+    if track_data.get("mixer_channel_id") is not None:
+        mixer_channel = _extract_mixer_channel(conn, track_data["mixer_channel_id"])
+
     return {
         "type": "sample_track",
-        "track": _row_to_dict(track),
+        "track": track_data,
         "sample_clips": _rows_to_list(clips),
         "effects": _rows_to_list(effects),
+        "mixer_channel": mixer_channel,
+    }
+
+
+def _extract_pattern_track(conn: sqlite3.Connection, track_id: int) -> dict:
+    """Extract a complete pattern track with pattern clips and referenced patterns."""
+    track = conn.execute(
+        "SELECT * FROM pattern_track WHERE id = ?", (track_id,)
+    ).fetchone()
+    if track is None:
+        raise ValueError(f"Pattern track {track_id} not found")
+
+    clips = conn.execute(
+        "SELECT * FROM pattern_clip WHERE pattern_track_id = ?", (track_id,)
+    ).fetchall()
+
+    # Collect referenced patterns
+    pattern_ids = list({c["pattern_id"] for c in clips})
+    patterns = []
+    if pattern_ids:
+        placeholders = ",".join("?" * len(pattern_ids))
+        patterns = conn.execute(
+            f"SELECT * FROM pattern WHERE id IN ({placeholders})",  # noqa: S608
+            pattern_ids,
+        ).fetchall()
+
+    return {
+        "type": "pattern_track",
+        "track": _row_to_dict(track),
+        "pattern_clips": _rows_to_list(clips),
+        "patterns": _rows_to_list(patterns),
     }
 
 
@@ -1552,10 +1664,93 @@ def _insert_row(conn: sqlite3.Connection, table: str, data: dict) -> int:
     return cursor.lastrowid
 
 
+def _insert_mixer_channel(conn: sqlite3.Connection, channel_data: dict | None) -> int | None:
+    """Insert a mixer channel from template, returning new channel ID.
+
+    If the channel already exists (by ID), returns the existing ID.
+    """
+    if channel_data is None:
+        return None
+    data = dict(channel_data)
+    effects = data.pop("effects", [])
+    routes = data.pop("routes_out", [])
+    old_id = data.get("id")
+
+    # Check if this channel ID already exists in the target
+    existing = conn.execute(
+        "SELECT id FROM mixer_channel WHERE id = ?", (old_id,)
+    ).fetchone()
+    if existing:
+        return old_id  # reuse existing channel
+
+    # Create the mixer channel
+    new_id = _insert_row(conn, "mixer_channel", data)
+
+    # Insert effects
+    for effect in effects:
+        effect_data = dict(effect)
+        effect_data.pop("id", None)
+        effect_data["owner_type"] = "mixer_channel"
+        effect_data["owner_id"] = new_id
+        effect_data["id"] = _next_id(conn, "effect")
+        _insert_row(conn, "effect", effect_data)
+
+    # Insert routes
+    for route in routes:
+        route_data = dict(route)
+        route_data.pop("id", None)
+        route_data["from_channel_id"] = new_id
+        route_data["id"] = _next_id(conn, "mixer_route")
+        _insert_row(conn, "mixer_route", route_data)
+
+    return new_id
+
+
+def _insert_controllers(
+    conn: sqlite3.Connection, connections: list[dict], owner_type: str, owner_id: int
+) -> int:
+    """Insert controller connections and their controllers. Returns count inserted."""
+    count = 0
+    for cc in connections:
+        cc_data = dict(cc)
+        cc_data.pop("id", None)
+        controller_data = cc_data.pop("controller", None)
+
+        # Insert the controller if it doesn't exist
+        controller_id = cc_data.get("controller_id")
+        if controller_data:
+            ctrl = dict(controller_data)
+            old_ctrl_id = ctrl.pop("id", None)
+            # Check if controller already exists
+            existing = conn.execute(
+                "SELECT id FROM controller WHERE id = ?", (old_ctrl_id,)
+            ).fetchone()
+            if existing:
+                controller_id = old_ctrl_id
+            else:
+                ctrl["id"] = _next_id(conn, "controller")
+                controller_id = _insert_row(conn, "controller", ctrl)
+
+        cc_data["owner_type"] = owner_type
+        cc_data["owner_id"] = owner_id
+        cc_data["controller_id"] = controller_id
+        cc_data["id"] = _next_id(conn, "controller_connection")
+        _insert_row(conn, "controller_connection", cc_data)
+        count += 1
+    return count
+
+
 def _insert_instrument_track(conn: sqlite3.Connection, template: dict) -> dict:
     """Insert an instrument track template into a project. Returns ID mapping."""
     track_data = dict(template["track"])
     old_track_id = track_data.pop("id", None)
+
+    # Handle mixer channel - insert if provided, remap the FK
+    mixer_channel = template.get("mixer_channel")
+    if mixer_channel:
+        new_mixer_id = _insert_mixer_channel(conn, mixer_channel)
+        if new_mixer_id is not None:
+            track_data["mixer_channel_id"] = new_mixer_id
 
     # Assign new ID and sort_order
     track_data["id"] = _next_id(conn, "instrument_track")
@@ -1600,6 +1795,12 @@ def _insert_instrument_track(conn: sqlite3.Connection, template: dict) -> dict:
         effect_data["id"] = _next_id(conn, "effect")
         _insert_row(conn, "effect", effect_data)
 
+    # Controller connections
+    _insert_controllers(
+        conn, template.get("controller_connections", []),
+        "instrument_track", new_track_id,
+    )
+
     return {
         "new_track_id": new_track_id,
         "old_track_id": old_track_id,
@@ -1612,6 +1813,13 @@ def _insert_sample_track(conn: sqlite3.Connection, template: dict) -> dict:
     """Insert a sample track template into a project."""
     track_data = dict(template["track"])
     old_track_id = track_data.pop("id", None)
+
+    # Handle mixer channel
+    mixer_channel = template.get("mixer_channel")
+    if mixer_channel:
+        new_mixer_id = _insert_mixer_channel(conn, mixer_channel)
+        if new_mixer_id is not None:
+            track_data["mixer_channel_id"] = new_mixer_id
 
     track_data["id"] = _next_id(conn, "sample_track")
     track_data["sort_order"] = _next_sort_order(conn, "sample_track")
@@ -1632,6 +1840,50 @@ def _insert_sample_track(conn: sqlite3.Connection, template: dict) -> dict:
         effect_data["owner_id"] = new_track_id
         effect_data["id"] = _next_id(conn, "effect")
         _insert_row(conn, "effect", effect_data)
+
+    return {
+        "new_track_id": new_track_id,
+        "old_track_id": old_track_id,
+        "clips_inserted": clips_inserted,
+    }
+
+
+def _insert_pattern_track(conn: sqlite3.Connection, template: dict) -> dict:
+    """Insert a pattern track template into a project."""
+    track_data = dict(template["track"])
+    old_track_id = track_data.pop("id", None)
+
+    track_data["id"] = _next_id(conn, "pattern_track")
+    track_data["sort_order"] = _next_sort_order(conn, "pattern_track")
+    new_track_id = _insert_row(conn, "pattern_track", track_data)
+
+    # Insert patterns (if not already present)
+    pattern_id_map = {}
+    for pattern in template.get("patterns", []):
+        pat_data = dict(pattern)
+        old_pat_id = pat_data.pop("id", None)
+        existing = conn.execute(
+            "SELECT id FROM pattern WHERE id = ?", (old_pat_id,)
+        ).fetchone()
+        if existing:
+            pattern_id_map[old_pat_id] = old_pat_id
+        else:
+            pat_data["id"] = _next_id(conn, "pattern")
+            new_pat_id = _insert_row(conn, "pattern", pat_data)
+            pattern_id_map[old_pat_id] = new_pat_id
+
+    # Insert pattern clips with remapped IDs
+    clips_inserted = 0
+    for clip in template.get("pattern_clips", []):
+        clip_data = dict(clip)
+        clip_data.pop("id", None)
+        clip_data["pattern_track_id"] = new_track_id
+        old_pat_id = clip_data.get("pattern_id")
+        if old_pat_id in pattern_id_map:
+            clip_data["pattern_id"] = pattern_id_map[old_pat_id]
+        clip_data["id"] = _next_id(conn, "pattern_clip")
+        _insert_row(conn, "pattern_clip", clip_data)
+        clips_inserted += 1
 
     return {
         "new_track_id": new_track_id,
@@ -1696,7 +1948,7 @@ def extract_track_template(
 
     Args:
         db_path: Path to the source .lmms-db project file.
-        track_type: One of: instrument_track, sample_track, automation_track.
+        track_type: One of: instrument_track, sample_track, automation_track, pattern_track.
         track_id: ID of the track to extract.
         output_path: Optional path to save the template JSON. If empty, returns inline.
     """
@@ -1704,6 +1956,7 @@ def extract_track_template(
         "instrument_track": _extract_instrument_track,
         "sample_track": _extract_sample_track,
         "automation_track": _extract_automation_track,
+        "pattern_track": _extract_pattern_track,
     }
     if track_type not in extractors:
         return _err(f"track_type must be one of: {', '.join(sorted(extractors))}")
@@ -1739,6 +1992,7 @@ def extract_tracks_bulk(
         "instrument_track": _extract_instrument_track,
         "sample_track": _extract_sample_track,
         "automation_track": _extract_automation_track,
+        "pattern_track": _extract_pattern_track,
     }
 
     try:
@@ -1794,6 +2048,7 @@ def insert_track_template(
         "instrument_track": _insert_instrument_track,
         "sample_track": _insert_sample_track,
         "automation_track": _insert_automation_track,
+        "pattern_track": _insert_pattern_track,
     }
 
     try:
@@ -1865,6 +2120,233 @@ def create_blank_project(db_path: str, name: str = "New Project", bpm: float = 1
         return _ok(status="created", db_path=db_path, name=name, bpm=bpm)
     except sqlite3.Error as e:
         return _err(str(e))
+
+
+@mcp.tool()
+def project_create_instrument_track(
+    db_path: str,
+    name: str,
+    instrument_plugin: str,
+    instrument_params_json: str = "{}",
+    volume: float = 100.0,
+    panning: float = 0.0,
+    pitch: float = 0.0,
+    mixer_channel_id: int = 0,
+    notes: str = "[]",
+    effects: str = "[]",
+) -> str:
+    """Create a new instrument track from scratch in a .lmms-db project.
+
+    This is the high-level tool for "I want to add this instrument with
+    these notes and these effects."
+
+    Args:
+        db_path: Path to the .lmms-db project file.
+        name: Track name.
+        instrument_plugin: Plugin name (e.g., "TripleOscillator", "ZynAddSubFX", "Kicker").
+        instrument_params_json: JSON object of plugin parameters.
+        volume: Track volume (0-200, default 100).
+        panning: Track panning (-100 to 100, default 0).
+        pitch: Track pitch offset.
+        mixer_channel_id: Mixer channel to route to (0 = master).
+        notes: JSON array of note objects. Each note: {"position": int (ticks),
+               "length": int (ticks), "key": int (0-127, 69=A4),
+               "volume": int (0-127, default 100), "panning": int (-100 to 100, default 0)}.
+               LMMS uses 192 ticks per beat.
+        effects: JSON array of effect objects. Each effect:
+                {"plugin_name": str, "params_json": str (JSON), "enabled": bool (default true),
+                 "wet": float (0-1, default 1), "gate": float (default 0)}.
+    """
+    try:
+        note_list = json.loads(notes)
+        effect_list = json.loads(effects)
+
+        with open_project(db_path) as conn:
+            track_id = _next_id(conn, "instrument_track")
+            sort_order = _next_sort_order(conn, "instrument_track")
+
+            # Create the instrument track
+            conn.execute(
+                """INSERT INTO instrument_track
+                   (id, name, volume, panning, pitch, mixer_channel_id,
+                    instrument_plugin, instrument_params_json, sort_order)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (track_id, name, volume, panning, pitch,
+                 mixer_channel_id or None, instrument_plugin,
+                 instrument_params_json, sort_order),
+            )
+
+            # Create a MIDI clip for the notes (if any)
+            notes_inserted = 0
+            if note_list:
+                clip_id = _next_id(conn, "midi_clip")
+                # Get project's first pattern ID (or create one)
+                pattern = conn.execute(
+                    "SELECT id FROM pattern ORDER BY sort_order LIMIT 1"
+                ).fetchone()
+                if pattern is None:
+                    pattern_id = _next_id(conn, "pattern")
+                    conn.execute(
+                        "INSERT INTO pattern (id, name, sort_order) VALUES (?, 'Pattern 0', 0)",
+                        (pattern_id,),
+                    )
+                else:
+                    pattern_id = pattern["id"]
+
+                conn.execute(
+                    """INSERT INTO midi_clip (id, instrument_track_id, pattern_id,
+                       clip_type, steps)
+                       VALUES (?, ?, ?, 1, 32)""",
+                    (clip_id, track_id, pattern_id),
+                )
+
+                for note in note_list:
+                    note_id = _next_id(conn, "note")
+                    conn.execute(
+                        """INSERT INTO note (id, midi_clip_id, position, length, key, volume, panning)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (note_id, clip_id, note["position"], note["length"],
+                         note["key"], note.get("volume", 100), note.get("panning", 0)),
+                    )
+                    notes_inserted += 1
+
+            # Add effects
+            effects_inserted = 0
+            for i, eff in enumerate(effect_list):
+                effect_id = _next_id(conn, "effect")
+                conn.execute(
+                    """INSERT INTO effect (id, owner_type, owner_id, plugin_name,
+                       sort_order, enabled, wet, gate, params_json)
+                       VALUES (?, 'instrument_track', ?, ?, ?, ?, ?, ?, ?)""",
+                    (effect_id, track_id, eff["plugin_name"], i,
+                     1 if eff.get("enabled", True) else 0,
+                     eff.get("wet", 1.0), eff.get("gate", 0.0),
+                     eff.get("params_json", "{}")),
+                )
+                effects_inserted += 1
+
+            return _ok(
+                track_id=track_id,
+                name=name,
+                instrument=instrument_plugin,
+                notes_inserted=notes_inserted,
+                effects_inserted=effects_inserted,
+            )
+    except (FileNotFoundError, ValueError, sqlite3.Error) as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def project_add_effect(
+    db_path: str,
+    owner_type: str,
+    owner_id: int,
+    plugin_name: str,
+    params_json: str = "{}",
+    enabled: bool = True,
+    wet: float = 1.0,
+    gate: float = 0.0,
+) -> str:
+    """Add an effect to a track or mixer channel in a .lmms-db project.
+
+    Args:
+        db_path: Path to the .lmms-db project file.
+        owner_type: What to attach the effect to: instrument_track, sample_track, mixer_channel.
+        owner_id: ID of the track or mixer channel.
+        plugin_name: Effect plugin name (e.g., "ReverbSC", "Delay", "Eq").
+        params_json: JSON object of effect parameters.
+        enabled: Whether the effect is enabled.
+        wet: Wet/dry mix (0.0 to 1.0).
+        gate: Gate threshold.
+    """
+    valid_owners = {"instrument_track", "sample_track", "mixer_channel"}
+    if owner_type not in valid_owners:
+        return _err(f"owner_type must be one of: {', '.join(sorted(valid_owners))}")
+    try:
+        with open_project(db_path) as conn:
+            effect_id = _next_id(conn, "effect")
+            sort_order = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 as n FROM effect WHERE owner_type = ? AND owner_id = ?",
+                (owner_type, owner_id),
+            ).fetchone()["n"]
+            conn.execute(
+                """INSERT INTO effect (id, owner_type, owner_id, plugin_name,
+                   sort_order, enabled, wet, gate, params_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (effect_id, owner_type, owner_id, plugin_name,
+                 sort_order, int(enabled), wet, gate, params_json),
+            )
+            return _ok(effect_id=effect_id, plugin_name=plugin_name, owner_type=owner_type)
+    except (FileNotFoundError, ValueError, sqlite3.Error) as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def project_set_bpm(db_path: str, bpm: float) -> str:
+    """Set the BPM of a .lmms-db project.
+
+    Args:
+        db_path: Path to the .lmms-db project file.
+        bpm: New BPM value.
+    """
+    try:
+        with open_project(db_path) as conn:
+            conn.execute("UPDATE project SET bpm = ?, modified_at = datetime('now') WHERE id = 1", (bpm,))
+            return _ok(status="updated", bpm=bpm)
+    except (FileNotFoundError, ValueError, sqlite3.Error) as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def import_project_file(
+    file_path: str,
+    target_db_path: str = "",
+) -> str:
+    """Import any LMMS project file (.mmp, .mmpz, or .lmms-db) into a .lmms-db.
+
+    Handles legacy/old .mmp files gracefully by auto-converting through
+    lmms_convert.py. If the file is already .lmms-db, copies it to the target path.
+
+    Args:
+        file_path: Path to the source project file (.mmp, .mmpz, or .lmms-db).
+        target_db_path: Optional target .lmms-db path. Defaults to same name with .lmms-db extension.
+    """
+    p = Path(file_path)
+    if not p.exists():
+        return _err(f"File not found: {file_path}")
+
+    if not target_db_path:
+        target_db_path = str(p.with_suffix(".lmms-db"))
+
+    target = Path(target_db_path)
+
+    if p.suffix == ".lmms-db":
+        if str(p.resolve()) != str(target.resolve()):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(p), str(target))
+        return _ok(status="ready", db_path=target_db_path, format="lmms-db")
+
+    if p.suffix in (".mmp", ".mmpz"):
+        convert_script = TOOLS_DIR / "lmms_convert.py"
+        if not convert_script.exists():
+            return _err(f"lmms_convert.py not found at {convert_script}")
+        try:
+            result = subprocess.run(
+                ["python3", str(convert_script), file_path, target_db_path],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode != 0:
+                return _err(f"Conversion failed: {result.stderr[:500]}")
+            return _ok(
+                status="converted",
+                source=file_path,
+                db_path=target_db_path,
+                format=p.suffix.lstrip("."),
+            )
+        except subprocess.TimeoutExpired:
+            return _err("Conversion timed out")
+
+    return _err(f"Unsupported file format: {p.suffix}")
 
 
 @mcp.tool()

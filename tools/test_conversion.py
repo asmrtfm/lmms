@@ -18,6 +18,7 @@ import sys
 import os
 import tempfile
 import sqlite3
+import traceback
 import zlib
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -25,6 +26,7 @@ from pathlib import Path
 # Add tools directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 from lmms_convert import convert, read_mmp_file, DEFAULT_PATTERN_LENGTH, LEGACY_TAG_MAP
+from lmms_export import export_to_xml
 
 
 def log(msg):
@@ -304,6 +306,112 @@ def test_file(input_path):
             os.unlink(db_path)
 
 
+def test_roundtrip(input_path):
+    """Test XML → SQLite → XML → SQLite round-trip preserves data.
+
+    Converts the input file to SQLite, exports back to XML, converts that XML
+    back to SQLite, and compares entity counts between the two databases.
+
+    The round-trip is lossy for song-level InstrumentTracks (they become PatternTracks),
+    so we compare the second SQLite against itself (both should have identical data since
+    the export→import chain is idempotent after the first conversion).
+    """
+    input_path = Path(input_path)
+    log(f"=== Round-trip: {input_path.name} ===")
+
+    db1_path = None
+    xml_path = None
+    db2_path = None
+
+    try:
+        # Step 1: XML → SQLite
+        with tempfile.NamedTemporaryFile(suffix=".lmms-db", delete=False) as f:
+            db1_path = f.name
+        convert(str(input_path), db1_path)
+        db1_counts = count_db_entities(db1_path)
+
+        # Step 2: SQLite → XML
+        with tempfile.NamedTemporaryFile(suffix=".mmp", delete=False) as f:
+            xml_path = f.name
+        export_to_xml(db1_path, xml_path)
+
+        # Step 3: XML → SQLite (second pass)
+        with tempfile.NamedTemporaryFile(suffix=".lmms-db", delete=False) as f:
+            db2_path = f.name
+        convert(xml_path, db2_path)
+        db2_counts = count_db_entities(db2_path)
+
+        passed = 0
+        failed = 0
+
+        # Compare key counts between db1 and db2
+        # After the first conversion, song-level instrument tracks become pattern tracks,
+        # so db2 will have them all in the patternstore. The total counts should match.
+        compare_keys = [
+            ("note", "Notes"),
+            ("midi_clip", "MIDI clips"),
+            ("mixer_channel", "Mixer channels"),
+            ("mixer_route", "Mixer routes"),
+            ("effect", "Effects"),
+            ("automation_track", "Automation tracks"),
+            ("automation_clip", "Automation clips"),
+            ("automation_node", "Automation nodes"),
+        ]
+
+        for key, label in compare_keys:
+            if db1_counts[key] == db2_counts[key]:
+                passed += 1
+            else:
+                log(f"  FAIL: {label} mismatch: db1={db1_counts[key]}, db2={db2_counts[key]}")
+                failed += 1
+
+        # Instrument tracks: db2 should have same count as db1
+        if db1_counts["instrument_track"] == db2_counts["instrument_track"]:
+            passed += 1
+        else:
+            log(f"  FAIL: Instrument tracks: db1={db1_counts['instrument_track']}, db2={db2_counts['instrument_track']}")
+            failed += 1
+
+        # Pattern tracks: db2 should have same count as db1
+        if db1_counts["pattern_track"] == db2_counts["pattern_track"]:
+            passed += 1
+        else:
+            log(f"  FAIL: Pattern tracks: db1={db1_counts['pattern_track']}, db2={db2_counts['pattern_track']}")
+            failed += 1
+
+        # Pattern clips: db2 should have same count as db1
+        if db1_counts["pattern_clip"] == db2_counts["pattern_clip"]:
+            passed += 1
+        else:
+            log(f"  FAIL: Pattern clips: db1={db1_counts['pattern_clip']}, db2={db2_counts['pattern_clip']}")
+            failed += 1
+
+        # Referential integrity on db2
+        integrity_issues = check_referential_integrity(db2_path)
+        if not integrity_issues:
+            passed += 1
+        else:
+            for issue in integrity_issues:
+                log(f"  FAIL: db2 integrity: {issue}")
+            failed += 1
+
+        if failed == 0:
+            log(f"  PASS: Round-trip OK ({passed} checks)")
+        else:
+            log(f"  Result: {passed} passed, {failed} failed")
+
+        return passed, failed
+
+    except Exception as e:
+        log(f"  FAIL: Round-trip error: {e}")
+        traceback.print_exc(file=sys.stderr)
+        return 0, 1
+    finally:
+        for path in (db1_path, xml_path, db2_path):
+            if path and os.path.exists(path):
+                os.unlink(path)
+
+
 def main():
     repo_root = Path(__file__).parent.parent
 
@@ -343,7 +451,19 @@ def main():
         passed, failed = test_file(f)
         total_passed += passed
         total_failed += failed
-        file_results.append((f.name, passed, failed))
+        file_results.append((f.name + " (convert)", passed, failed))
+
+    # Round-trip tests
+    log("")
+    log("=" * 60)
+    log("ROUND-TRIP TESTS (XML → SQLite → XML → SQLite)")
+    log("=" * 60)
+
+    for f in test_files:
+        passed, failed = test_roundtrip(f)
+        total_passed += passed
+        total_failed += failed
+        file_results.append((f.name + " (roundtrip)", passed, failed))
 
     log("")
     log("=" * 60)

@@ -8,19 +8,14 @@ Usage:
 
 If output path is omitted, uses the input filename with .lmms-db extension.
 
-The converter reads the XML DOM and populates a SQLite database following
-the schema in lmms_schema.sql. It handles:
-- PatternStore instrument tracks and their midiclips/notes
-- Pattern tracks with patternclips on the Song Editor timeline
-- Song-level InstrumentTracks (type="0" in Song) → converted to new PatternTracks
-- Mixer channels with effects chains and routing
-- Automation tracks/clips with time nodes and object targets
-- Sample tracks/clips
-- Legacy tag name compatibility (bbtco→patternclip, pattern→midiclip, etc.)
+DESIGN PRINCIPLE: Every attribute and child element in the XML is stored.
+Named columns exist for commonly-queried fields. Everything else goes into
+extra_json columns as a catch-all. This guarantees lossless round-trips.
 """
 
 import sys
 import os
+import re
 import zlib
 import json
 import sqlite3
@@ -52,7 +47,7 @@ def read_mmp_file(path):
 
     if path.suffix.lower() == ".mmpz":
         with open(path, "rb") as f:
-            # .mmpz files have a 4-byte header (data length) followed by gzip data
+            # .mmpz files have a 4-byte header (data length) followed by zlib data
             header = f.read(4)
             compressed = f.read()
         log(f"Decompressing .mmpz ({len(compressed)} bytes compressed)")
@@ -92,6 +87,83 @@ def elem_to_json(elem):
     return result
 
 
+def extra_attrs(elem, known_keys):
+    """Capture all attributes NOT in known_keys as a dict.
+    Returns {} if none extra.
+    """
+    return {k: v for k, v in elem.attrib.items() if k not in known_keys}
+
+
+def extra_children(elem, known_tags):
+    """Capture all child elements whose tags are NOT in known_tags as JSON.
+    Returns a dict mapping tag -> elem_to_json(child).
+    If multiple children with same unknown tag, becomes a list.
+    """
+    result = {}
+    for child in elem:
+        if child.tag in known_tags:
+            continue
+        child_data = elem_to_json(child)
+        if child.tag in result:
+            if not isinstance(result[child.tag], list):
+                result[child.tag] = [result[child.tag]]
+            result[child.tag].append(child_data)
+        else:
+            result[child.tag] = child_data
+    return result
+
+
+# ─── Name normalization (port of Track::normalizeTrackNames) ───
+
+def normalize_name(name):
+    """Normalize a single track name: strip clone-jank, replace whitespace with underscores."""
+    # Step 1: remove "Clone of" prefixes (case-insensitive)
+    name = re.sub(r'[Cc]lone[\s+\-_]+of[\s+\-_]+', '', name).strip()
+    # Step 2: replace whitespace runs with underscores
+    name = re.sub(r'\s+', '_', name)
+    return name
+
+
+def normalize_names(names):
+    """Normalize a list of track names, deduplicating with 3-digit counters.
+    Returns a list of normalized names in the same order.
+    """
+    result = []
+    used = set()
+    for original in names:
+        candidate = normalize_name(original)
+        if candidate not in used:
+            result.append(candidate)
+            used.add(candidate)
+            if candidate != original:
+                log(f"  normalize: '{original}' -> '{candidate}'")
+            continue
+
+        # Conflict — add counter
+        has_counter = (len(candidate) >= 3
+                       and candidate[-3] == '0'
+                       and candidate[-2:].isdigit()
+                       and candidate[-3:].isdigit())
+        if has_counter:
+            base = candidate[:-3]
+            start = int(candidate[-3:]) + 1
+        else:
+            base = candidate + "_"
+            start = 1
+
+        for c in range(start, 100):
+            numbered = f"{base}{c:03d}"
+            if numbered not in used:
+                candidate = numbered
+                break
+
+        result.append(candidate)
+        used.add(candidate)
+        log(f"  normalize: '{original}' -> '{candidate}'")
+
+    return result
+
+
 def create_database(db_path):
     """Create a new SQLite database with the schema."""
     schema_path = Path(__file__).parent / "lmms_schema.sql"
@@ -113,33 +185,36 @@ def create_database(db_path):
     return conn
 
 
-def convert_project_metadata(conn, root):
+def convert_project_metadata(conn, root, project_name):
     """Extract <head> attributes into the project table."""
     head = root.find(".//head")
     if head is None:
         log("WARNING: No <head> element found, using defaults")
-        conn.execute("INSERT INTO project (id) VALUES (1)")
+        conn.execute("INSERT INTO project (id, name) VALUES (1, ?)", (project_name,))
         return
 
+    known = {"bpm", "timesig_numerator", "timesig_denominator", "mastervol", "masterpitch"}
     bpm = float(head.get("bpm", "140"))
     ts_num = int(head.get("timesig_numerator", "4"))
     ts_den = int(head.get("timesig_denominator", "4"))
     master_vol = float(head.get("mastervol", "100"))
     master_pitch = float(head.get("masterpitch", "0"))
+    extras = extra_attrs(head, known)
 
     conn.execute(
-        "INSERT INTO project (id, bpm, timesig_numerator, timesig_denominator, master_volume, master_pitch) "
-        "VALUES (1, ?, ?, ?, ?, ?)",
-        (bpm, ts_num, ts_den, master_vol, master_pitch),
+        "INSERT INTO project (id, name, bpm, timesig_numerator, timesig_denominator, "
+        "master_volume, master_pitch, extra_json) VALUES (1, ?, ?, ?, ?, ?, ?, ?)",
+        (project_name, bpm, ts_num, ts_den, master_vol, master_pitch, json.dumps(extras)),
     )
-    log(f"Project: bpm={bpm}, time_sig={ts_num}/{ts_den}, vol={master_vol}, pitch={master_pitch}")
+    log(f"Project: name='{project_name}', bpm={bpm}, time_sig={ts_num}/{ts_den}, vol={master_vol}, pitch={master_pitch}")
+    if extras:
+        log(f"  extra head attrs: {list(extras.keys())}")
 
 
 def convert_mixer(conn, root):
     """Extract mixer channels and routing."""
     mixer_channels = root.findall(".//mixerchannel")
     if not mixer_channels:
-        # Try legacy tag name
         mixer_channels = root.findall(".//fxchannel")
     if not mixer_channels:
         log("No mixer channels found")
@@ -148,7 +223,9 @@ def convert_mixer(conn, root):
     channel_count = 0
     route_count = 0
     effect_count = 0
-    deferred_routes = []  # (from_ch, to_ch, amount) — defer until all channels exist
+    deferred_routes = []
+
+    known_ch_attrs = {"num", "name", "volume", "muted", "soloed"}
 
     for ch_elem in mixer_channels:
         ch_num = int(ch_elem.get("num", "0"))
@@ -157,23 +234,26 @@ def convert_mixer(conn, root):
         ch_muted = int(ch_elem.get("muted", "0"))
         ch_soloed = int(ch_elem.get("soloed", "0"))
 
+        ch_extras = extra_attrs(ch_elem, known_ch_attrs)
+        # Also capture unknown child elements (not send, not fxchain)
+        ch_child_extras = extra_children(ch_elem, {"send", "fxchain"})
+        if ch_child_extras:
+            ch_extras["_children"] = ch_child_extras
+
         conn.execute(
-            "INSERT INTO mixer_channel (id, name, volume, muted, soloed, sort_order) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (ch_num, ch_name, ch_volume, ch_muted, ch_soloed, ch_num),
+            "INSERT INTO mixer_channel (id, name, volume, muted, soloed, sort_order, extra_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ch_num, ch_name, ch_volume, ch_muted, ch_soloed, ch_num, json.dumps(ch_extras)),
         )
         channel_count += 1
 
-        # Collect sends for deferred insertion
         for send_elem in ch_elem.findall("send"):
             to_channel = int(send_elem.get("channel", "0"))
             amount = float(send_elem.get("amount", "1.0"))
             deferred_routes.append((ch_num, to_channel, amount))
 
-        # Extract effects chain
         effect_count += convert_fxchain(conn, ch_elem, "mixer_channel", ch_num)
 
-    # Insert routes now that all channels exist
     for from_ch, to_ch, amount in deferred_routes:
         conn.execute(
             "INSERT INTO mixer_route (from_channel_id, to_channel_id, amount) VALUES (?, ?, ?)",
@@ -188,7 +268,6 @@ def convert_fxchain(conn, parent_elem, owner_type, owner_id):
     """Extract effects from an <fxchain> element. Returns count of effects inserted."""
     fxchain = parent_elem.find("fxchain")
     if fxchain is None:
-        # Also check inside instrumenttrack/sampletrack settings nodes
         for settings_tag in ("instrumenttrack", "sampletrack"):
             settings = parent_elem.find(settings_tag)
             if settings is not None:
@@ -199,6 +278,9 @@ def convert_fxchain(conn, parent_elem, owner_type, owner_id):
     if fxchain is None:
         return 0
 
+    # Capture ALL attributes on fxchain itself (numofeffects, enabled, etc.)
+    known_fx_attrs = {"name", "on", "wet", "gate"}
+
     count = 0
     for idx, fx_elem in enumerate(fxchain.findall("effect")):
         plugin_name = fx_elem.get("name", "unknown")
@@ -206,11 +288,13 @@ def convert_fxchain(conn, parent_elem, owner_type, owner_id):
         wet = float(fx_elem.get("wet", "1.0"))
         gate = float(fx_elem.get("gate", "0.0"))
 
-        # Collect all plugin-specific parameters as JSON
+        # ALL extra attributes and ALL child elements go into params_json
         params = {}
+        fx_extras = extra_attrs(fx_elem, known_fx_attrs)
+        if fx_extras:
+            params["_extra_attrs"] = fx_extras
         for child in fx_elem:
             if child.tag == "key":
-                # <key> contains plugin identification attributes
                 params["_key"] = elem_to_json(child)
             else:
                 params[child.tag] = elem_to_json(child)
@@ -229,10 +313,29 @@ def extract_instrument_track_data(track_elem):
     """Extract instrument track settings from a <track type='0'> element.
 
     Returns a dict with all the fields needed for the instrument_track table.
+    Captures ALL attributes and ALL child elements — nothing is dropped.
     """
     it_elem = track_elem.find("instrumenttrack")
     if it_elem is None:
         return None
+
+    # Known <track> attributes
+    known_track_attrs = {"type", "name", "muted", "solo", "color"}
+    track_extras = extra_attrs(track_elem, known_track_attrs)
+
+    # Known <instrumenttrack> attributes
+    known_it_attrs = {"vol", "pan", "pitch", "pitchrange", "mixch", "fxch",
+                      "basenote", "usemasterpitch"}
+    it_extras = extra_attrs(it_elem, known_it_attrs)
+
+    # Known <instrumenttrack> child elements (captured in named columns)
+    known_it_children = {"instrument", "eldata", "arpeggiator", "chordcreator",
+                         "midiport", "fxchain", "microtuner"}
+
+    # Capture ALL unknown child elements of <instrumenttrack>
+    unknown_children = extra_children(it_elem, known_it_children)
+    if unknown_children:
+        it_extras["_children"] = unknown_children
 
     data = {
         "name": track_elem.get("name", ""),
@@ -246,19 +349,25 @@ def extract_instrument_track_data(track_elem):
         "base_note": int(it_elem.get("basenote", "69")),
         "use_master_pitch": int(it_elem.get("usemasterpitch", "1")),
         "color": track_elem.get("color"),
+        "track_extra_json": json.dumps(track_extras),
+        "instrumenttrack_extra_json": json.dumps(it_extras),
     }
 
     # Instrument plugin
     instrument = it_elem.find("instrument")
     if instrument is not None:
         data["instrument_plugin"] = instrument.get("name", "unknown")
-        # The plugin's own element is the first child of <instrument>
         plugin_elem = None
+        key_elem = None
         for child in instrument:
-            if child.tag != "key":
+            if child.tag == "key":
+                key_elem = child
+            elif plugin_elem is None:
                 plugin_elem = child
-                break
-        data["instrument_params_json"] = json.dumps(elem_to_json(plugin_elem)) if plugin_elem else "{}"
+        params = elem_to_json(plugin_elem) if plugin_elem is not None else {}
+        if key_elem is not None:
+            params["_key"] = elem_to_json(key_elem)
+        data["instrument_params_json"] = json.dumps(params)
     else:
         data["instrument_plugin"] = "unknown"
         data["instrument_params_json"] = "{}"
@@ -279,7 +388,7 @@ def extract_instrument_track_data(track_elem):
     midi = it_elem.find("midiport")
     data["midi_port_json"] = json.dumps(elem_to_json(midi)) if midi is not None else "{}"
 
-    # Microtuner (scale/keymap references)
+    # Microtuner
     microtuner = it_elem.find("microtuner")
     data["microtuner_json"] = json.dumps(elem_to_json(microtuner)) if microtuner is not None else "{}"
 
@@ -293,8 +402,9 @@ def insert_instrument_track(conn, data, sort_order):
         "(name, volume, panning, pitch, pitch_range, mixer_channel_id, base_note, "
         "use_master_pitch, muted, solo, color, sort_order, "
         "instrument_plugin, instrument_params_json, sound_shaping_json, "
-        "arpeggio_json, chord_creator_json, midi_port_json, microtuner_json) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "arpeggio_json, chord_creator_json, midi_port_json, microtuner_json, "
+        "track_extra_json, instrumenttrack_extra_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             data["name"],
             data["volume"],
@@ -315,6 +425,8 @@ def insert_instrument_track(conn, data, sort_order):
             data["chord_creator_json"],
             data["midi_port_json"],
             data["microtuner_json"],
+            data["track_extra_json"],
+            data["instrumenttrack_extra_json"],
         ),
     )
     return cursor.lastrowid
@@ -325,6 +437,7 @@ def convert_notes(conn, clip_elem, midi_clip_id):
 
     Returns the number of notes inserted.
     """
+    known_note_attrs = {"pos", "len", "key", "vol", "pan", "type"}
     count = 0
     for note_elem in clip_elem.findall("note"):
         pos = int(note_elem.get("pos", "0"))
@@ -333,11 +446,12 @@ def convert_notes(conn, clip_elem, midi_clip_id):
         volume = int(note_elem.get("vol", "100"))
         panning = int(note_elem.get("pan", "0"))
         note_type = int(note_elem.get("type", "0"))
+        note_extras = extra_attrs(note_elem, known_note_attrs)
 
         note_cursor = conn.execute(
-            "INSERT INTO note (midi_clip_id, position, length, key, volume, panning, note_type) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (midi_clip_id, pos, length, key, volume, panning, note_type),
+            "INSERT INTO note (midi_clip_id, position, length, key, volume, panning, note_type, extra_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (midi_clip_id, pos, length, key, volume, panning, note_type, json.dumps(note_extras)),
         )
 
         # Check for detuning automation on this note
@@ -366,7 +480,6 @@ def convert_notes(conn, clip_elem, midi_clip_id):
 def find_clip_elements(track_elem, tag_name):
     """Find clip elements by tag name, handling legacy names."""
     results = list(track_elem.findall(tag_name))
-    # Also check legacy tag names
     for old_tag, new_tag in LEGACY_TAG_MAP.items():
         if new_tag == tag_name:
             results.extend(track_elem.findall(old_tag))
@@ -376,27 +489,25 @@ def find_clip_elements(track_elem, tag_name):
 def convert_patternstore(conn, patternstore_elem, pattern_id_map):
     """Convert the PatternStore's instrument tracks and their midiclips.
 
-    Args:
-        conn: SQLite connection
-        patternstore_elem: The <trackcontainer type="patternstore"> element
-        pattern_id_map: Dict mapping old pattern index → new pattern.id (populated here)
-
-    Returns:
-        (instrument_track_count, midi_clip_count, note_count)
+    Returns (instrument_track_count, midi_clip_count, note_count)
     """
     it_count = 0
     mc_count = 0
     note_count = 0
 
+    # Collect and normalize instrument track names
+    track_elems = [t for t in patternstore_elem.findall("track") if t.get("type") == "0"]
+    original_names = [t.get("name", "") for t in track_elems]
+    normalized_names = normalize_names(original_names)
+
     # First pass: discover all pattern indices used by any midiclip
     all_pattern_indices = set()
-    for track_elem in patternstore_elem.findall("track"):
+    for track_elem in track_elems:
         for clip_elem in find_clip_elements(track_elem, "midiclip"):
             pos = int(clip_elem.get("pos", "0"))
             pattern_idx = pos // DEFAULT_PATTERN_LENGTH
             all_pattern_indices.add(pattern_idx)
 
-    # Create pattern rows for all discovered indices
     for idx in sorted(all_pattern_indices):
         cursor = conn.execute(
             "INSERT INTO pattern (name, sort_order) VALUES (?, ?)",
@@ -406,42 +517,24 @@ def convert_patternstore(conn, patternstore_elem, pattern_id_map):
 
     log(f"PatternStore: {len(all_pattern_indices)} patterns discovered")
 
+    known_mc_attrs = {"type", "name", "pos", "muted", "mute", "steps", "color"}
+
     # Second pass: convert instrument tracks and their midiclips
-    for sort_order, track_elem in enumerate(patternstore_elem.findall("track")):
-        if track_elem.get("type") != "0":
-            log(f"WARNING: Non-instrument track type={track_elem.get('type')} in patternstore, skipping")
-            continue
+    for sort_order, (track_elem, norm_name) in enumerate(zip(track_elems, normalized_names)):
+        # Apply normalized name to the element before extraction
+        track_elem.set("name", norm_name)
 
         data = extract_instrument_track_data(track_elem)
         if data is None:
-            log(f"WARNING: Track '{track_elem.get('name', '?')}' has no <instrumenttrack>, skipping")
+            log(f"WARNING: Track '{norm_name}' has no <instrumenttrack>, skipping")
             continue
 
         it_id = insert_instrument_track(conn, data, sort_order)
 
-        # Also extract effects from the instrumenttrack element
-        it_elem = track_elem.find("instrumenttrack")
-        if it_elem is not None:
-            fxchain = it_elem.find("fxchain")
-            if fxchain is not None:
-                fx_count = 0
-                for fx_idx, fx_elem in enumerate(fxchain.findall("effect")):
-                    plugin_name = fx_elem.get("name", "unknown")
-                    enabled = int(fx_elem.get("on", "1"))
-                    wet = float(fx_elem.get("wet", "1.0"))
-                    gate = float(fx_elem.get("gate", "0.0"))
-                    params = {}
-                    for child in fx_elem:
-                        if child.tag == "key":
-                            params["_key"] = elem_to_json(child)
-                        else:
-                            params[child.tag] = elem_to_json(child)
-                    conn.execute(
-                        "INSERT INTO effect (owner_type, owner_id, plugin_name, sort_order, enabled, wet, gate, params_json) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        ("instrument_track", it_id, plugin_name, fx_idx, enabled, wet, gate, json.dumps(params)),
-                    )
-                    fx_count += 1
+        # Extract effects
+        fx_count = convert_fxchain(conn, track_elem, "instrument_track", it_id)
+        if fx_count > 0:
+            log(f"  Track '{data['name']}': {fx_count} effects")
 
         it_count += 1
 
@@ -459,16 +552,16 @@ def convert_patternstore(conn, patternstore_elem, pattern_id_map):
             muted = int(clip_elem.get("muted", clip_elem.get("mute", "0")))
             clip_name = clip_elem.get("name", "")
             clip_color = clip_elem.get("color")
+            mc_extras = extra_attrs(clip_elem, known_mc_attrs)
 
             cursor = conn.execute(
                 "INSERT OR IGNORE INTO midi_clip "
-                "(instrument_track_id, pattern_id, clip_type, steps, muted, name, color) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (it_id, pattern_id, clip_type, steps, muted, clip_name, clip_color),
+                "(instrument_track_id, pattern_id, clip_type, steps, muted, name, color, extra_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (it_id, pattern_id, clip_type, steps, muted, clip_name, clip_color, json.dumps(mc_extras)),
             )
             mc_id = cursor.lastrowid
             if mc_id == 0:
-                # UNIQUE constraint hit — shouldn't happen with proper data
                 log(f"WARNING: Duplicate midi_clip for track {it_id}, pattern {pattern_id}")
                 row = conn.execute(
                     "SELECT id FROM midi_clip WHERE instrument_track_id=? AND pattern_id=?",
@@ -488,41 +581,36 @@ def convert_patternstore(conn, patternstore_elem, pattern_id_map):
 def convert_pattern_tracks(conn, song_tc, pattern_id_map):
     """Convert Pattern tracks (type="1") from the Song trackcontainer.
 
-    Each pattern track gets:
-    - A pattern_track row
-    - pattern_clip rows for any patternclips it has
-
-    The pattern_id for each patternclip is determined by the track's position
-    (sort order) among pattern tracks, since in the XML format, the Nth pattern
-    track corresponds to pattern index N.
-
     Returns (pattern_track_count, pattern_clip_count)
     """
     pt_count = 0
     pc_count = 0
 
-    pattern_track_idx = 0
-    for track_elem in song_tc.findall("track"):
-        if track_elem.get("type") != "1":
-            continue
+    known_track_attrs = {"type", "name", "muted", "solo", "color"}
+    known_pc_attrs = {"pos", "len", "off", "muted", "name", "color"}
 
-        name = track_elem.get("name", f"Pattern Track {pattern_track_idx}")
-        muted = int(track_elem.get("muted", "0"))
-        solo = int(track_elem.get("solo", "0"))
-        color = track_elem.get("color")
+    # Collect and normalize pattern track names
+    track_elems = [t for t in song_tc.findall("track") if t.get("type") == "1"]
+    original_names = [t.get("name", f"Pattern Track {i}") for i, t in enumerate(track_elems)]
+    normalized_names = normalize_names(original_names)
 
-        # The pattern_id for this track's clips is its index among pattern tracks
-        # This needs to map to the same pattern IDs created in convert_patternstore
+    for pattern_track_idx, (track_elem, norm_name) in enumerate(zip(track_elems, normalized_names)):
+        track_extras = extra_attrs(track_elem, known_track_attrs)
+
         this_pattern_id = pattern_id_map.get(pattern_track_idx)
 
         cursor = conn.execute(
-            "INSERT INTO pattern_track (name, muted, solo, color, sort_order) VALUES (?, ?, ?, ?, ?)",
-            (name, muted, solo, color, pattern_track_idx),
+            "INSERT INTO pattern_track (name, muted, solo, color, sort_order, extra_json) VALUES (?, ?, ?, ?, ?, ?)",
+            (norm_name,
+             int(track_elem.get("muted", "0")),
+             int(track_elem.get("solo", "0")),
+             track_elem.get("color"),
+             pattern_track_idx,
+             json.dumps(track_extras)),
         )
         pt_id = cursor.lastrowid
         pt_count += 1
 
-        # Convert patternclips
         for clip_elem in find_clip_elements(track_elem, "patternclip"):
             clip_pos = int(clip_elem.get("pos", "0"))
             clip_len = int(clip_elem.get("len", "0"))
@@ -530,9 +618,9 @@ def convert_pattern_tracks(conn, song_tc, pattern_id_map):
             clip_muted = int(clip_elem.get("muted", "0"))
             clip_name = clip_elem.get("name", "")
             clip_color = clip_elem.get("color")
+            clip_extras = extra_attrs(clip_elem, known_pc_attrs)
 
             if this_pattern_id is None:
-                # Pattern index not found — create one
                 pcursor = conn.execute(
                     "INSERT INTO pattern (name, sort_order) VALUES (?, ?)",
                     (f"Pattern {pattern_track_idx}", pattern_track_idx),
@@ -542,13 +630,12 @@ def convert_pattern_tracks(conn, song_tc, pattern_id_map):
 
             conn.execute(
                 "INSERT INTO pattern_clip "
-                "(pattern_track_id, pattern_id, position, length, start_offset, muted, name, color) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (pt_id, this_pattern_id, clip_pos, clip_len, clip_off, clip_muted, clip_name, clip_color),
+                "(pattern_track_id, pattern_id, position, length, start_offset, muted, name, color, extra_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (pt_id, this_pattern_id, clip_pos, clip_len, clip_off, clip_muted, clip_name, clip_color,
+                 json.dumps(clip_extras)),
             )
             pc_count += 1
-
-        pattern_track_idx += 1
 
     log(f"Pattern tracks: {pt_count} tracks, {pc_count} clips")
     return pt_count, pc_count
@@ -557,33 +644,24 @@ def convert_pattern_tracks(conn, song_tc, pattern_id_map):
 def convert_song_level_instrument_tracks(conn, song_tc, pattern_id_map):
     """Convert Song-level InstrumentTracks (type="0" directly in Song) to PatternTracks.
 
-    These tracks don't belong to the PatternStore — they're a legacy/advanced feature.
-    We convert them by:
-    1. Creating a new instrument_track in the PatternStore
-    2. Creating a new pattern for each such track
-    3. Creating a new pattern_track in the Song
-    4. Moving any midiclips into the new pattern
-    5. Creating patternclips that reference the new pattern
-
     Returns (converted_count)
     """
     converted = 0
 
-    # Count existing patterns to know where to start new ones
     max_pattern_idx = max(pattern_id_map.keys()) if pattern_id_map else -1
-    # Count existing pattern tracks for sort_order
     existing_pt_count = conn.execute("SELECT COUNT(*) FROM pattern_track").fetchone()[0]
-    # Count existing instrument tracks for sort_order
     existing_it_count = conn.execute("SELECT COUNT(*) FROM instrument_track").fetchone()[0]
 
     for track_elem in song_tc.findall("track"):
         if track_elem.get("type") != "0":
             continue
 
-        track_name = track_elem.get("name", "Converted Track")
+        track_name = normalize_name(track_elem.get("name", "Converted Track"))
         log(f"Converting song-level InstrumentTrack '{track_name}' to PatternTrack")
 
-        # 1. Create new pattern
+        # Apply normalized name
+        track_elem.set("name", track_name)
+
         max_pattern_idx += 1
         new_pattern_idx = max_pattern_idx
         pcursor = conn.execute(
@@ -593,7 +671,6 @@ def convert_song_level_instrument_tracks(conn, song_tc, pattern_id_map):
         new_pattern_id = pcursor.lastrowid
         pattern_id_map[new_pattern_idx] = new_pattern_id
 
-        # 2. Create new instrument track
         data = extract_instrument_track_data(track_elem)
         if data is None:
             log(f"WARNING: Song-level track '{track_name}' has no <instrumenttrack>, skipping")
@@ -601,37 +678,15 @@ def convert_song_level_instrument_tracks(conn, song_tc, pattern_id_map):
 
         it_id = insert_instrument_track(conn, data, existing_it_count + converted)
 
-        # Also convert effects
-        it_elem = track_elem.find("instrumenttrack")
-        if it_elem is not None:
-            fxchain = it_elem.find("fxchain")
-            if fxchain is not None:
-                for fx_idx, fx_elem in enumerate(fxchain.findall("effect")):
-                    plugin_name = fx_elem.get("name", "unknown")
-                    enabled = int(fx_elem.get("on", "1"))
-                    wet = float(fx_elem.get("wet", "1.0"))
-                    gate = float(fx_elem.get("gate", "0.0"))
-                    params = {}
-                    for child in fx_elem:
-                        if child.tag == "key":
-                            params["_key"] = elem_to_json(child)
-                        else:
-                            params[child.tag] = elem_to_json(child)
-                    conn.execute(
-                        "INSERT INTO effect (owner_type, owner_id, plugin_name, sort_order, enabled, wet, gate, params_json) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        ("instrument_track", it_id, plugin_name, fx_idx, enabled, wet, gate, json.dumps(params)),
-                    )
+        convert_fxchain(conn, track_elem, "instrument_track", it_id)
 
-        # 3. Create new pattern track
         ptcursor = conn.execute(
-            "INSERT INTO pattern_track (name, muted, solo, color, sort_order) VALUES (?, ?, ?, ?, ?)",
-            (track_name, data["muted"], data["solo"], data["color"], existing_pt_count + converted),
+            "INSERT INTO pattern_track (name, muted, solo, color, sort_order, extra_json) VALUES (?, ?, ?, ?, ?, ?)",
+            (track_name, data["muted"], data["solo"], data["color"], existing_pt_count + converted, "{}"),
         )
         pt_id = ptcursor.lastrowid
 
-        # 4. Convert midiclips — each gets its own pattern since song-level tracks
-        #    can have multiple independent clips at different timeline positions
+        known_mc_attrs = {"type", "name", "pos", "muted", "mute", "steps", "color"}
         midiclips = find_clip_elements(track_elem, "midiclip")
         note_count = 0
         for clip_idx, clip_elem in enumerate(midiclips):
@@ -640,8 +695,8 @@ def convert_song_level_instrument_tracks(conn, song_tc, pattern_id_map):
             steps = int(clip_elem.get("steps", "32"))
             muted = int(clip_elem.get("muted", clip_elem.get("mute", "0")))
             clip_name = clip_elem.get("name", "")
+            mc_extras = extra_attrs(clip_elem, known_mc_attrs)
 
-            # Each midiclip in a song-level track gets its own pattern
             if clip_idx == 0:
                 clip_pattern_id = new_pattern_id
             else:
@@ -653,18 +708,16 @@ def convert_song_level_instrument_tracks(conn, song_tc, pattern_id_map):
                 clip_pattern_id = pcur.lastrowid
                 pattern_id_map[max_pattern_idx] = clip_pattern_id
 
-            # Create midi_clip
             mc_cursor = conn.execute(
                 "INSERT INTO midi_clip "
-                "(instrument_track_id, pattern_id, clip_type, steps, muted, name) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (it_id, clip_pattern_id, clip_type, steps, muted, clip_name),
+                "(instrument_track_id, pattern_id, clip_type, steps, muted, name, extra_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (it_id, clip_pattern_id, clip_type, steps, muted, clip_name, json.dumps(mc_extras)),
             )
             mc_id = mc_cursor.lastrowid
 
             note_count += convert_notes(conn, clip_elem, mc_id)
 
-            # Calculate clip length from notes if not explicitly set
             notes_in_clip = clip_elem.findall("note")
             if notes_in_clip:
                 max_end = 0
@@ -676,12 +729,11 @@ def convert_song_level_instrument_tracks(conn, song_tc, pattern_id_map):
             else:
                 clip_len = steps * 12
 
-            # Create a patternclip referencing this clip's pattern
             conn.execute(
                 "INSERT INTO pattern_clip "
-                "(pattern_track_id, pattern_id, position, length, start_offset, muted, name) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (pt_id, clip_pattern_id, clip_pos, clip_len, 0, muted, clip_name),
+                "(pattern_track_id, pattern_id, position, length, start_offset, muted, name, extra_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (pt_id, clip_pattern_id, clip_pos, clip_len, 0, muted, clip_name, "{}"),
             )
 
         log(f"  -> Created pattern track '{track_name}' with {len(midiclips)} clips, {note_count} notes")
@@ -701,9 +753,11 @@ def convert_automation_tracks(conn, song_tc):
     ac_count = 0
     an_count = 0
 
+    known_track_attrs = {"type", "name", "muted", "solo", "color"}
+    known_ac_attrs = {"pos", "len", "prog", "tens", "mute", "muted", "name", "color"}
+
     for track_elem in song_tc.findall("track"):
         track_type = track_elem.get("type", "")
-        # type 5 = Automation, type 6 = HiddenAutomation
         if track_type not in ("5", "6"):
             continue
 
@@ -711,15 +765,15 @@ def convert_automation_tracks(conn, song_tc):
         muted = int(track_elem.get("muted", "0"))
         solo = int(track_elem.get("solo", "0"))
         color = track_elem.get("color")
+        track_extras = extra_attrs(track_elem, known_track_attrs)
 
         cursor = conn.execute(
-            "INSERT INTO automation_track (name, muted, solo, color, sort_order) VALUES (?, ?, ?, ?, ?)",
-            (name, muted, solo, color, at_count),
+            "INSERT INTO automation_track (name, muted, solo, color, sort_order, extra_json) VALUES (?, ?, ?, ?, ?, ?)",
+            (name, muted, solo, color, at_count, json.dumps(track_extras)),
         )
         at_id = cursor.lastrowid
         at_count += 1
 
-        # Find automation clips (both current and legacy tag names)
         clip_elems = find_clip_elements(track_elem, "automationclip")
 
         for clip_elem in clip_elems:
@@ -730,17 +784,22 @@ def convert_automation_tracks(conn, song_tc):
             clip_muted = int(clip_elem.get("mute", clip_elem.get("muted", "0")))
             clip_name = clip_elem.get("name", "")
             clip_color = clip_elem.get("color")
+            clip_extras = extra_attrs(clip_elem, known_ac_attrs)
+            # Capture unknown children (not time, not object)
+            clip_child_extras = extra_children(clip_elem, {"time", "object"})
+            if clip_child_extras:
+                clip_extras["_children"] = clip_child_extras
 
             ac_cursor = conn.execute(
                 "INSERT INTO automation_clip "
-                "(automation_track_id, position, length, progression_type, tension, muted, name, color) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (at_id, clip_pos, clip_len, progression, tension, clip_muted, clip_name, clip_color),
+                "(automation_track_id, position, length, progression_type, tension, muted, name, color, extra_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (at_id, clip_pos, clip_len, progression, tension, clip_muted, clip_name, clip_color,
+                 json.dumps(clip_extras)),
             )
             ac_id = ac_cursor.lastrowid
             ac_count += 1
 
-            # Extract time nodes
             for time_elem in clip_elem.findall("time"):
                 t_pos = int(time_elem.get("pos", "0"))
                 t_value = float(time_elem.get("value", "0"))
@@ -757,7 +816,6 @@ def convert_automation_tracks(conn, song_tc):
                 )
                 an_count += 1
 
-            # Extract automation targets (object references)
             for obj_elem in clip_elem.findall("object"):
                 obj_id = int(obj_elem.get("id", "0"))
                 conn.execute(
@@ -778,6 +836,10 @@ def convert_sample_tracks(conn, song_tc):
     st_count = 0
     sc_count = 0
 
+    known_track_attrs = {"type", "name", "muted", "solo", "color"}
+    known_st_attrs = {"vol", "pan", "mixch", "fxch"}
+    known_sc_attrs = {"pos", "len", "src", "muted", "name", "color"}
+
     for track_elem in song_tc.findall("track"):
         if track_elem.get("type") != "2":
             continue
@@ -786,47 +848,38 @@ def convert_sample_tracks(conn, song_tc):
         muted = int(track_elem.get("muted", "0"))
         solo = int(track_elem.get("solo", "0"))
         color = track_elem.get("color")
+        track_extras = extra_attrs(track_elem, known_track_attrs)
 
-        # Extract sample track settings
         st_elem = track_elem.find("sampletrack")
         volume = 100.0
         panning = 0.0
         mixer_ch = None
+        st_extras = {}
         if st_elem is not None:
             volume = float(st_elem.get("vol", "100"))
             panning = float(st_elem.get("pan", "0"))
-            mixer_ch = int(st_elem.get("mixch", "0")) if st_elem.get("mixch") else None
+            mixer_ch = int(st_elem.get("mixch", st_elem.get("fxch", "0"))) if (st_elem.get("mixch") or st_elem.get("fxch")) else None
+            st_extras = extra_attrs(st_elem, known_st_attrs)
+            # Capture unknown children of sampletrack (not fxchain)
+            st_child_extras = extra_children(st_elem, {"fxchain"})
+            if st_child_extras:
+                st_extras["_children"] = st_child_extras
+
+        # Merge track-level extras
+        all_extras = {**track_extras}
+        if st_extras:
+            all_extras["_sampletrack"] = st_extras
 
         cursor = conn.execute(
-            "INSERT INTO sample_track (name, volume, panning, mixer_channel_id, muted, solo, color, sort_order) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (name, volume, panning, mixer_ch, muted, solo, color, st_count),
+            "INSERT INTO sample_track (name, volume, panning, mixer_channel_id, muted, solo, color, sort_order, extra_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, volume, panning, mixer_ch, muted, solo, color, st_count, json.dumps(all_extras)),
         )
         st_id = cursor.lastrowid
         st_count += 1
 
-        # Extract effects from sample track
-        if st_elem is not None:
-            fxchain = st_elem.find("fxchain")
-            if fxchain is not None:
-                for fx_idx, fx_elem in enumerate(fxchain.findall("effect")):
-                    plugin_name = fx_elem.get("name", "unknown")
-                    enabled = int(fx_elem.get("on", "1"))
-                    wet = float(fx_elem.get("wet", "1.0"))
-                    gate = float(fx_elem.get("gate", "0.0"))
-                    params = {}
-                    for child in fx_elem:
-                        if child.tag == "key":
-                            params["_key"] = elem_to_json(child)
-                        else:
-                            params[child.tag] = elem_to_json(child)
-                    conn.execute(
-                        "INSERT INTO effect (owner_type, owner_id, plugin_name, sort_order, enabled, wet, gate, params_json) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        ("sample_track", st_id, plugin_name, fx_idx, enabled, wet, gate, json.dumps(params)),
-                    )
+        convert_fxchain(conn, track_elem, "sample_track", st_id)
 
-        # Convert sample clips
         for clip_elem in find_clip_elements(track_elem, "sampleclip"):
             clip_pos = int(clip_elem.get("pos", "0"))
             clip_len = int(clip_elem.get("len", "0"))
@@ -834,12 +887,14 @@ def convert_sample_tracks(conn, song_tc):
             clip_muted = int(clip_elem.get("muted", "0"))
             clip_name = clip_elem.get("name", "")
             clip_color = clip_elem.get("color")
+            clip_extras = extra_attrs(clip_elem, known_sc_attrs)
 
             conn.execute(
                 "INSERT INTO sample_clip "
-                "(sample_track_id, position, length, source_path, muted, name, color) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (st_id, clip_pos, clip_len, clip_src, clip_muted, clip_name, clip_color),
+                "(sample_track_id, position, length, source_path, muted, name, color, extra_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (st_id, clip_pos, clip_len, clip_src, clip_muted, clip_name, clip_color,
+                 json.dumps(clip_extras)),
             )
             sc_count += 1
 
@@ -849,18 +904,12 @@ def convert_sample_tracks(conn, song_tc):
 
 
 def convert_controllers(conn, root):
-    """Convert <controller> elements from the ControllerRack.
-
-    Note: Controllers are stored as children of the song element in some formats,
-    or within track settings as controller connections.
-    """
-    # Look for controllers in various locations
+    """Convert <controller> elements from the ControllerRack."""
     count = 0
     for ctrl_elem in root.findall(".//controller"):
         ctrl_type_num = ctrl_elem.get("type", "")
         ctrl_name = ctrl_elem.get("name", "")
 
-        # Map type numbers to names
         type_map = {"0": "lfo", "1": "midi", "2": "peak"}
         ctrl_type = type_map.get(ctrl_type_num, f"type_{ctrl_type_num}")
 
@@ -895,7 +944,6 @@ def validate_database(conn):
         if count > 0:
             log(f"  {table}: {count} rows")
 
-    # Check referential integrity
     orphan_clips = conn.execute(
         "SELECT COUNT(*) FROM pattern_clip pc "
         "LEFT JOIN pattern_track pt ON pc.pattern_track_id = pt.id "
@@ -931,19 +979,18 @@ def convert(input_path, output_path=None):
     else:
         output_path = Path(output_path)
 
-    # Read and parse the XML
+    # Project name = input file basename (without extension)
+    project_name = input_path.stem
+
     root = read_mmp_file(input_path)
 
-    # Create the SQLite database
     conn = create_database(output_path)
 
     try:
-        # Convert in order of dependency
+        # 1. Project metadata (with project name from filename)
+        convert_project_metadata(conn, root, project_name)
 
-        # 1. Project metadata
-        convert_project_metadata(conn, root)
-
-        # 2. Mixer channels (needed before tracks that reference them)
+        # 2. Mixer channels
         convert_mixer(conn, root)
 
         # 3. PatternStore instrument tracks and midiclips
@@ -957,11 +1004,10 @@ def convert(input_path, output_path=None):
             log("ERROR: No <trackcontainer> in <song>")
             sys.exit(1)
 
-        # Find the PatternStore (new format: type="patternstore", old format: type="bbtrackcontainer")
         patternstore = song_tc.find('.//trackcontainer[@type="patternstore"]')
         if patternstore is None:
             patternstore = song_tc.find('.//trackcontainer[@type="bbtrackcontainer"]')
-        pattern_id_map = {}  # old_index -> new_pattern_id
+        pattern_id_map = {}
 
         if patternstore is not None:
             convert_patternstore(conn, patternstore, pattern_id_map)
@@ -974,18 +1020,17 @@ def convert(input_path, output_path=None):
         # 5. Song-level InstrumentTracks → PatternTracks
         convert_song_level_instrument_tracks(conn, song_tc, pattern_id_map)
 
-        # 6. Automation tracks (check both trackcontainer and direct song children)
+        # 6. Automation tracks
         convert_automation_tracks(conn, song_tc)
         convert_automation_tracks(conn, song)
 
-        # 7. Sample tracks (check both trackcontainer and direct song children)
+        # 7. Sample tracks
         convert_sample_tracks(conn, song_tc)
         convert_sample_tracks(conn, song)
 
         # 8. Controllers
         convert_controllers(conn, root)
 
-        # Commit and validate
         conn.commit()
         validate_database(conn)
 

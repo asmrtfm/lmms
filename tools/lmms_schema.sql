@@ -1,6 +1,9 @@
--- LMMS SQLite Project Format Schema v1
+-- LMMS SQLite Project Format Schema v2
 -- Replaces the monolithic XML .mmp/.mmpz format with a relational database.
 -- All entities have proper ID-based references instead of position-based identification.
+--
+-- DESIGN PRINCIPLE: Every table has an extra_json column that captures ALL attributes
+-- and child elements not stored in named columns. This guarantees lossless round-trips.
 
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -15,7 +18,8 @@ CREATE TABLE project (
     master_volume REAL NOT NULL DEFAULT 100,
     master_pitch REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    modified_at TEXT NOT NULL DEFAULT (datetime('now'))
+    modified_at TEXT NOT NULL DEFAULT (datetime('now')),
+    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other <head> attributes
 );
 
 -- Mixer channels
@@ -26,7 +30,8 @@ CREATE TABLE mixer_channel (
     muted INTEGER NOT NULL DEFAULT 0,
     soloed INTEGER NOT NULL DEFAULT 0,
     color TEXT,
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other attributes and child elements
 );
 
 -- Mixer routing (sends)
@@ -47,7 +52,7 @@ CREATE TABLE effect (
     enabled INTEGER NOT NULL DEFAULT 1,
     wet REAL NOT NULL DEFAULT 1.0,
     gate REAL NOT NULL DEFAULT 0.0,
-    params_json TEXT NOT NULL DEFAULT '{}'
+    params_json TEXT NOT NULL DEFAULT '{}'  -- ALL other attributes and child elements
 );
 
 -- Instrument tracks (live in PatternStore only)
@@ -77,7 +82,10 @@ CREATE TABLE instrument_track (
     -- MIDI port config
     midi_port_json TEXT NOT NULL DEFAULT '{}',
     -- Microtuner
-    microtuner_json TEXT NOT NULL DEFAULT '{}'
+    microtuner_json TEXT NOT NULL DEFAULT '{}',
+    -- Catch-all for everything else (track attrs, instrumenttrack attrs, unknown children)
+    track_extra_json TEXT NOT NULL DEFAULT '{}',
+    instrumenttrack_extra_json TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Pattern tracks (Song Editor timeline objects)
@@ -87,7 +95,8 @@ CREATE TABLE pattern_track (
     muted INTEGER NOT NULL DEFAULT 0,
     solo INTEGER NOT NULL DEFAULT 0,
     color TEXT,
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other <track> attributes
 );
 
 -- Pattern clips (the rectangular objects on the Song Editor timeline)
@@ -100,7 +109,8 @@ CREATE TABLE pattern_clip (
     start_offset INTEGER NOT NULL DEFAULT 0,
     muted INTEGER NOT NULL DEFAULT 0,
     name TEXT,
-    color TEXT
+    color TEXT,
+    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other attributes
 );
 
 -- Patterns (the columns in the PatternStore grid)
@@ -120,6 +130,7 @@ CREATE TABLE midi_clip (
     muted INTEGER NOT NULL DEFAULT 0,
     name TEXT,
     color TEXT,
+    extra_json TEXT NOT NULL DEFAULT '{}',  -- all other attributes
     UNIQUE(instrument_track_id, pattern_id)
 );
 
@@ -132,7 +143,8 @@ CREATE TABLE note (
     key INTEGER NOT NULL,
     volume INTEGER NOT NULL DEFAULT 100,
     panning INTEGER NOT NULL DEFAULT 0,
-    note_type INTEGER NOT NULL DEFAULT 0  -- 0=regular, 1=step
+    note_type INTEGER NOT NULL DEFAULT 0,  -- 0=regular, 1=step
+    extra_json TEXT NOT NULL DEFAULT '{}'   -- all other attributes
 );
 CREATE INDEX idx_note_clip_pos ON note(midi_clip_id, position);
 
@@ -157,7 +169,8 @@ CREATE TABLE sample_track (
     muted INTEGER NOT NULL DEFAULT 0,
     solo INTEGER NOT NULL DEFAULT 0,
     color TEXT,
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other track/sampletrack attrs and children
 );
 
 -- Sample clips
@@ -169,7 +182,8 @@ CREATE TABLE sample_clip (
     source_path TEXT NOT NULL,
     muted INTEGER NOT NULL DEFAULT 0,
     name TEXT,
-    color TEXT
+    color TEXT,
+    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other attributes
 );
 
 -- Automation tracks
@@ -179,7 +193,8 @@ CREATE TABLE automation_track (
     muted INTEGER NOT NULL DEFAULT 0,
     solo INTEGER NOT NULL DEFAULT 0,
     color TEXT,
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other track attrs
 );
 
 -- Automation clips
@@ -192,7 +207,8 @@ CREATE TABLE automation_clip (
     tension REAL NOT NULL DEFAULT 1.0,
     muted INTEGER NOT NULL DEFAULT 0,
     name TEXT,
-    color TEXT
+    color TEXT,
+    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other attributes
 );
 
 -- Automation nodes (time-value pairs within an automation clip)

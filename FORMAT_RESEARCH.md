@@ -584,3 +584,209 @@ A read-only `.mmp`/`.mmpz` parser:
 - Convert journal ID-based automation references to symbolic paths during import
 - Apply the equivalent of the 30+ upgrade methods during import
 - **One-way migration:** Old format in, new format out. Never write XML again.
+
+---
+
+## Part 8: Community Wishlist — How It Affects the Architecture
+
+The LMMS community's top requests (from GitHub issues, forums, Reddit, and X posts across 2025–2026) validate this format design and reveal additional requirements the architecture must serve.
+
+### 1. Audio Recording (Community Priority #1 Missing Feature)
+
+**What they want:** Record microphones, guitars, and external audio directly into LMMS with real-time monitoring, punch-in/out, multi-take layers, and seamless clip integration.
+
+**Current state:** LMMS has `SampleRecordHandle` and `SampleClip` with a `m_recordModel` toggle — rudimentary recording exists but is incomplete. `SampleRecordHandle` accumulates buffers in memory (`QList<QPair<SampleFrame*, f_cnt_t>>`) and creates a `SampleBuffer` when done. There's no punch-in/out, no multi-take, no real-time monitoring path.
+
+**Impact on the format architecture:**
+
+The directory-based format is *ideally* suited for audio recording:
+
+```
+MyProject.lmms-project/
+├── recordings/                    # NEW: dedicated folder for recorded audio
+│   ├── take_001_2026-03-04.wav    # timestamped raw recordings
+│   ├── take_002_2026-03-04.wav    # multiple takes preserved
+│   └── take_003_2026-03-04.wav
+├── samples/                       # imported/referenced samples (read-only)
+│   ├── kick.wav
+│   └── snare.wav
+```
+
+Why this works:
+- **Streaming to disk:** Record directly to a `.wav` file in `recordings/`. No DOM manipulation, no base64 encoding, no in-memory accumulation. The current C++ approach of buffering in memory would OOM on long recordings.
+- **Multi-take workflow:** Each take is a separate file. The track JSON references which take is "active." Comping (selecting best parts across takes) becomes a metadata operation, not a destructive edit.
+- **Non-destructive editing:** The raw recording is never modified. Trim points, fades, and time-stretch are metadata in the clip JSON. Multiple clips can reference different regions of the same recording.
+- **Autosave safety:** Recording writes to its own file. If LMMS crashes, the raw audio is already on disk — the SQLite journal just needs to record that a recording was in progress.
+
+```json
+// tracks/track_005.json (a SampleTrack with recorded audio)
+{
+  "type": "sample",
+  "name": "Vocal Lead",
+  "clips": [
+    {
+      "type": "sample_clip",
+      "position": 384,
+      "source": "recordings/take_002_2026-03-04.wav",
+      "start_frame": 44100,         // trim: start 1 second in
+      "end_frame": 441000,          // trim: end at 10 seconds
+      "fade_in_frames": 2205,       // 50ms fade-in
+      "fade_out_frames": 4410,      // 100ms fade-out
+      "pitch_shift": 0,
+      "time_stretch": 1.0
+    }
+  ],
+  "takes": [
+    { "file": "recordings/take_001_2026-03-04.wav", "active": false },
+    { "file": "recordings/take_002_2026-03-04.wav", "active": true },
+    { "file": "recordings/take_003_2026-03-04.wav", "active": false }
+  ]
+}
+```
+
+**Template portability:** When exporting a track with recorded audio as a `.lmms-track`, the active recording(s) are bundled in the ZIP. Takes can optionally be included or excluded (user choice — they might be large).
+
+### 2. Git-Like Project Versioning (Issue #8230)
+
+**What they want:** Project history, diffs, and the ability to revert to earlier versions. Users currently resort to "song-01.mmp, song-02.mmp, song-03.mmp" chaos.
+
+**Impact on the format architecture:**
+
+The SQLite autosave journal already provides this:
+
+```sql
+-- The snapshots table IS the version history
+CREATE TABLE snapshots (
+    id INTEGER PRIMARY KEY,
+    timestamp INTEGER NOT NULL,
+    label TEXT,                     -- optional user label: "added chorus", "v2 mixdown"
+    manifest TEXT NOT NULL          -- JSON: which files, which checksums
+);
+
+CREATE TABLE changes (
+    id INTEGER PRIMARY KEY,
+    snapshot_id INTEGER REFERENCES snapshots(id),
+    file_path TEXT NOT NULL,
+    content BLOB NOT NULL,
+    checksum TEXT NOT NULL
+);
+```
+
+- **Automatic versioning:** Every autosave creates a snapshot. The manifest records which files changed and their checksums.
+- **Named versions:** User can label a snapshot ("pre-mixdown", "added chorus") — this replaces "save-as song-02.mmp".
+- **Diff:** Because the project is JSON files, diffing two snapshots is just `diff snapshot_A/tracks/track_001.json snapshot_B/tracks/track_001.json`. Human-readable diffs.
+- **Revert:** Restoring a snapshot means extracting its files from the `changes` table back to the working directory.
+- **Storage-efficient:** Only changed files are stored per snapshot. If you only edited track 3, only `tracks/track_003.json` is stored — not the whole project.
+
+The directory + JSON format makes this *naturally* git-compatible too. Power users can literally `git init` inside their project directory and get real version control for free.
+
+### 3. Advanced Plugin Support (LV2/CLAP/VST3)
+
+**What they want:** Native LV2, CLAP, and VST3 support with multi-channel audio.
+
+**Impact on the format architecture:**
+
+Plugin state portability becomes more complex with modern plugin formats:
+
+- **CLAP plugins** support per-plugin state serialization — the binary state blob approach works as-is
+- **LV2 plugins** use Turtle/RDF for state — the format should support both binary blobs AND structured state
+- **VST3** has its own state serialization — binary blob approach works
+
+The track bundle format should handle this transparently:
+
+```json
+// instrument/instrument.json
+{
+  "plugin_format": "clap",             // or "lv2", "vst3", "internal"
+  "plugin_id": "com.u-he.Diva",
+  "state_format": "binary",            // or "lv2_turtle"
+  "state_file": "instrument/state.bin",
+  "fallback_params": {                  // human-readable fallback
+    "cutoff": 0.75,
+    "resonance": 0.3
+  }
+}
+```
+
+If the plugin isn't installed on the target machine, the `fallback_params` provide enough info to show the user what's missing and what values were set.
+
+### 4. Per-Pattern Automation (Issue #775)
+
+**What they want:** Automation that lives *inside* a pattern/clip, not on a separate global automation track.
+
+**Impact on the format architecture:**
+
+This is actually *easier* in the new format than in the current one. Today, automation clips live on separate AutomationTrack objects and reference targets by journal ID. In the new format, automation can be **embedded directly in the clip**:
+
+```json
+// tracks/track_001.json — a clip with embedded automation
+{
+  "clips": [
+    {
+      "type": "midi_clip",
+      "position": 0,
+      "length": 768,
+      "notes": [ ... ],
+      "automation": {
+        "track/sound_shaping/filter_cutoff": {
+          "progression": "cubic_hermite",
+          "keyframes": [
+            { "pos": 0, "value": 5000.0 },
+            { "pos": 384, "value": 800.0 }
+          ]
+        },
+        "track/effects/0/wet_dry": {
+          "progression": "linear",
+          "keyframes": [
+            { "pos": 0, "value": 0.3 },
+            { "pos": 768, "value": 1.0 }
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
+The symbolic parameter path system we designed for template portability *also* solves per-pattern automation. The automation travels with the clip, uses the same path scheme, and works identically in templates. This is a direct alignment between the portability design and the community's #4 request.
+
+**Global automation** (tempo changes, master volume) still lives on dedicated automation tracks in `automation/global.json`. But per-pattern automation is now a first-class concept.
+
+### 5. Non-Destructive Sample Editing
+
+**What they want:** Trim, fade, time-stretch, and pitch-shift without modifying the source file.
+
+**Impact on the format architecture:**
+
+The clip JSON already supports this naturally:
+
+```json
+{
+  "source": "samples/vocal.wav",
+  "start_frame": 44100,       // non-destructive trim start
+  "end_frame": 441000,        // non-destructive trim end
+  "fade_in_frames": 2205,
+  "fade_out_frames": 4410,
+  "pitch_shift": -2,          // semitones
+  "time_stretch": 1.05,       // ratio
+  "reverse": false,
+  "gain": 0.0                 // dB offset
+}
+```
+
+The source file is never modified. Multiple clips can reference different regions of the same file with different processing. This is standard practice in every professional DAW — the directory format makes it trivial.
+
+### 6. Summary: Community Requests vs. Architecture Alignment
+
+| Community Request | Supported by New Format? | How |
+|---|---|---|
+| **Track templates / reusability** | Yes — primary design goal | `.lmms-track` / `.lmms-group` ZIP bundles with symbolic refs |
+| **Audio recording** | Yes — natural fit | Stream-to-disk in `recordings/`, multi-take management in JSON |
+| **Project versioning** | Yes — built-in | SQLite journal snapshots, JSON diffs, git-compatible directory |
+| **Per-pattern automation** | Yes — enabled by symbolic paths | Automation embedded in clip JSON using the same path scheme |
+| **LV2/CLAP/VST3 plugins** | Yes — format-agnostic | Binary state blobs + structured fallback params in JSON |
+| **Non-destructive editing** | Yes — metadata-only edits | Trim/fade/pitch/stretch as clip properties, source file untouched |
+| **Git-like collaboration** | Yes — directory of JSON files | Each track is a file, meaningful diffs, merge-friendly |
+| **Multi-take recording** | Yes — file-per-take | Takes as separate files, comping as metadata selection |
+| **Better sample caching** | Yes — raw files, no base64 | Direct mmap of audio files, no decode step |
+| **64-bit focus** | Yes — Rust native | No 32-bit considerations in new codebase |

@@ -28,16 +28,20 @@ After evaluating the LMMS codebase (~912 C/C++ source files, 58 plugins, real-ti
 | Current Dependency | Rust Equivalent |
 |---|---|
 | Qt (GUI) | `iced`, `egui`, or `slint` |
-| PortAudio / ALSA / JACK | `cpal` (cross-platform audio I/O) |
+| PortAudio / ALSA / JACK | `cpal` (cross-platform audio I/O, including input/recording) |
 | fftw3 | `rustfft` |
-| libsndfile | `hound` (WAV), `symphonia` (multi-format) |
+| libsndfile | `hound` (WAV), `symphonia` (multi-format decode) |
 | libsamplerate | `rubato` |
 | fluidsynth | `fluidlite-rs` or FFI binding |
 | libvorbis / libogg | `lewton` (Vorbis decoder), `ogg` |
 | mp3lame | `mp3lame-encoder` or FFI |
-| LV2 / LADSPA / VST | `nih-plug` (plugin framework), `lv2` crate |
+| LV2 / LADSPA / VST | `nih-plug` (plugin framework), `lv2` crate, `clack-host` (CLAP) |
 | SDL2 | `sdl2` crate (if needed) |
 | zlib | `flate2` |
+| QDomDocument (XML) | `quick-xml` (SAX parser, legacy .mmp reading only) |
+| — (new: project format) | `serde` + `serde_json`, `zip`, `rusqlite` |
+| — (new: checksums) | `sha2` (sample dedup in templates) |
+| — (new: file watching) | `notify` (live directory watching) |
 
 ## Proposed Module Structure
 
@@ -47,11 +51,11 @@ lmms-rs/
 ├── crates/
 │   ├── lmms-core/              (audio engine, project model, transport)
 │   ├── lmms-dsp/               (DSP primitives, filters, oscillators)
-│   ├── lmms-midi/              (MIDI I/O and processing)
-│   ├── lmms-audio-io/          (audio backend abstraction via cpal)
-│   ├── lmms-plugin-host/       (LV2/VST/LADSPA plugin hosting)
+│   ├── lmms-midi/              (MIDI I/O and processing, MPE support)
+│   ├── lmms-audio-io/          (audio backend abstraction via cpal, recording)
+│   ├── lmms-plugin-host/       (LV2/VST3/CLAP/LADSPA plugin hosting)
 │   ├── lmms-gui/               (UI layer)
-│   ├── lmms-project/           (project file read/write, .mmp compat)
+│   ├── lmms-project/           (project file read/write, .mmp compat, templates)
 │   └── lmms-app/               (application entry point)
 ├── plugins/
 │   ├── triple-oscillator/
@@ -65,31 +69,68 @@ lmms-rs/
 
 ## Migration Strategy
 
+Priority ordering informed by community feedback (GitHub issues, forums, Reddit 2025-2026). The overarching theme: **modernization without breaking the core workflow**.
+
 ### Phase 1 — Foundation
 - Set up Cargo workspace
 - Implement `lmms-core` (sample buffers, audio graph, transport)
 - Implement `lmms-dsp` (oscillators, filters, envelopes)
-- Implement `lmms-audio-io` with `cpal`
+- Implement `lmms-audio-io` with `cpal` (including **audio input/recording** — community #1 missing feature)
+- MPE MIDI support from day one (added to C++ LMMS in 2025 — carry forward)
 
-### Phase 2 — Plugin System
+### Phase 2 — Project Format (see FORMAT_RESEARCH.md for deep analysis)
+Moved ahead of plugins because it's foundational to everything else.
+- Implement new hybrid project format:
+  - Working format: exploded directory (per-track JSON + raw samples)
+  - Save/share format: ZIP container (`.lmms`)
+  - Autosave: SQLite WAL journal with snapshot versioning
+- Implement **track bundle format** (`.lmms-track`, `.lmms-group`) for template portability
+- Symbolic parameter paths for automation (replaces session-specific journal IDs)
+- Per-pattern automation support (community request #775)
+- Legacy .mmp/.mmpz reader for one-way migration
+- Audio recording integration: stream-to-disk, multi-take management, non-destructive editing
+
+### Phase 3 — Plugin System
 - Define Rust plugin trait
 - Port built-in plugins (start with TripleOscillator, Bitcrush)
-- Add LV2/VST hosting via FFI
-
-### Phase 3 — Project Format (see detailed analysis below)
-- Implement legacy .mmp XML reader for backward compatibility
-- Implement new hybrid project format (directory + ZIP container)
-- Implement SQLite-backed autosave journal
+- **LV2 hosting** (community priority — in progress in C++ LMMS 1.3)
+- **CLAP hosting** (modern plugin format, gaining momentum)
+- **VST3 hosting** (via FFI, stable on all platforms)
+- LADSPA hosting (legacy support)
+- Plugin browser with search, tags, and previews (community UX request)
 
 ### Phase 4 — GUI
 - Build UI with chosen framework (iced or egui)
-- Implement piano roll, pattern editor, mixer, song editor
+- Implement piano roll with ghost notes, note labels, better zoom/slicing (community UX requests)
+- Pattern editor, mixer, song editor
+- **Multi-monitor / detachable windows** (community request)
 - MIDI controller mapping
+- Audio recording UI: waveform display, punch-in/out controls, take management
+- Track template drag-and-drop (import/export `.lmms-track` from song editor)
+- Project versioning UI: named snapshots, diff viewer, revert
 
 ### Phase 5 — Parity & Polish
-- Port remaining plugins
+- Port remaining plugins (58 total)
 - Full cross-platform testing (Linux, Windows, macOS)
 - Performance benchmarking against C++ version
+- Drop 32-bit support entirely (community request #7286)
+- Batch export / render settings persistence
+- JACK I/O improvements for Linux
+
+### Community Alignment
+
+| Community Priority | Phase | How Addressed |
+|---|---|---|
+| Track templates / reusability | Phase 2 | `.lmms-track` / `.lmms-group` ZIP bundles with symbolic refs |
+| Audio recording | Phase 1+2+4 | `cpal` input, stream-to-disk, multi-take, recording UI |
+| LV2/CLAP/VST3 plugins | Phase 3 | Native hosting for all modern formats |
+| Per-pattern automation | Phase 2 | Embedded in clip JSON via symbolic parameter paths |
+| Project versioning | Phase 2+4 | SQLite journal snapshots + UI for labeling/reverting |
+| Piano roll improvements | Phase 4 | Ghost notes, labels, zoom — UI-layer work |
+| Multi-monitor support | Phase 4 | Detachable windows in GUI framework |
+| Non-destructive sample editing | Phase 2 | Trim/fade/pitch as clip metadata, source file untouched |
+| Git-friendly collaboration | Phase 2 | Directory of JSON files, per-track isolation |
+| 64-bit only | Phase 5 | Clean break — no 32-bit considerations |
 
 ---
 

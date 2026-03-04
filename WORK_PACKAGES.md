@@ -166,17 +166,38 @@ This document breaks the Rust rewrite into concrete, shippable work packages. Ea
 - **Test:** Export track from project A → import into project B → verify sound is identical
 - **Depends on:** WP-2.2, WP-2.3, WP-2.4, WP-2.5
 
-### WP-2.8: Legacy .mmp/.mmpz Reader
-**Effort:** Large (7-10 days)
-**Output:** Read any existing LMMS project and convert to new format
+### WP-2.8: Legacy .mmp/.mmpz Reader (Two-Layer Import)
+**Effort:** Large (10-14 days)
+**Output:** Read any existing LMMS project with 1:1 fidelity — no data loss
+
+**Layer 1: Raw Preservation (Lossless)**
+- Store complete original XML in SQLite (`imported_projects` table)
+- Store every XML element and attribute verbatim (`mmp_elements` table with xpath, tag, attributes)
+- Preserve element ordering, window geometry, magic type integers — everything
+- SHA-256 hash of original file for integrity verification
+- This guarantees we can always reconstruct the original .mmp
+
+**Layer 2: Parsed Working Format**
 - `quick-xml` SAX parser for .mmp XML
 - `flate2` decompression for .mmpz
 - Walk XML tree → emit JSON files + extract base64 binary blobs to raw files
-- Convert journal ID-based automation references to symbolic parameter paths
+- Convert `mixch="N"` integer indices → named mixer channel references
+- Convert journal ID-based automation references → symbolic parameter paths
 - Implement equivalent of C++ LMMS's 30+ upgrade methods
 - Handle all track types: InstrumentTrack, SampleTrack, PatternTrack, AutomationTrack
-- **Test:** Convert all 28 demo projects + 6 templates; verify they load correctly in new format
-- **Depends on:** WP-2.2, WP-2.3, WP-2.4
+- Preserve sub-track hierarchy for Pattern/BB tracks
+
+**Mixer channel remapping:**
+- Read all `<mixerchannel>` definitions → build index-to-name map
+- Replace `mixch="2"` with `"mixer_channel": { "name": "Bass" }`
+- Store complete mixer channel definition (effects, sends, volume) alongside each track
+- Send routing stored by target channel NAME, never by index
+
+**Tests:**
+- Convert all 28 demo projects + 6 templates; verify they load correctly in new format
+- Round-trip fidelity test: import .mmp → verify every XML attribute exists in database
+- Reconstruction test: import → export selected tracks to blank project → render → compare audio
+- **Depends on:** WP-2.2, WP-2.3, WP-2.4, WP-2.6 (SQLite for raw preservation)
 
 ### WP-2.9: Preset Converter
 **Effort:** Small (2-3 days)

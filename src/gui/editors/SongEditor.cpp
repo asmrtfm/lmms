@@ -26,10 +26,18 @@
 
 #include <cmath>
 
+#include <cstdio>
+
 #include <QAction>
+#include <QCheckBox>
+#include <QDialogButtonBox>
+#include <QDir>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMdiArea>
+#include <QPushButton>
+#include <QScreen>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QSlider>
 #include <QTimeLine>
@@ -37,6 +45,12 @@
 #include "ActionGroup.h"
 #include "AudioDevice.h"
 #include "AudioEngine.h"
+#include "Clip.h"
+#include "DataFile.h"
+#include "FileDialog.h"
+#include "InstrumentTrack.h"
+#include "PatternStore.h"
+#include "PatternTrack.h"
 #include "AutomatableSlider.h"
 #include "ClipView.h"
 #include "ComboBox.h"
@@ -55,6 +69,7 @@
 #include "TextFloat.h"
 #include "TimeDisplayWidget.h"
 #include "TimeLineWidget.h"
+#include "Track.h"
 #include "TrackView.h"
 
 namespace lmms::gui
@@ -1023,6 +1038,28 @@ SongEditorWindow::SongEditorWindow(Song* song) :
 	snapToolBar->addSeparator();
 	snapToolBar->addWidget( m_snapSizeLabel );
 
+	// Pattern actions toolbar (right side)
+	DropToolBar *patternActionsToolBar = addDropToolBarToTop(tr("Pattern actions"));
+
+	auto patternStretch = new QWidget(m_toolBar);
+	patternStretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+	patternActionsToolBar->addWidget(patternStretch);
+
+	auto normalizeAction = new QAction(tr("Normalize names"), this);
+	normalizeAction->setToolTip(tr("Normalize pattern track names (strip \"Clone of\" prefixes, deduplicate)"));
+	connect(normalizeAction, SIGNAL(triggered()), this, SLOT(normalizePatternTrackNames()));
+	patternActionsToolBar->addAction(normalizeAction);
+
+	auto exportAction = new QAction(tr("Export patterns..."), this);
+	exportAction->setToolTip(tr("Export selected pattern tracks to .xppt files"));
+	connect(exportAction, SIGNAL(triggered()), this, SLOT(exportPatterns()));
+	patternActionsToolBar->addAction(exportAction);
+
+	auto importAction = new QAction(tr("Import patterns..."), this);
+	importAction->setToolTip(tr("Import .xppt pattern files"));
+	connect(importAction, SIGNAL(triggered()), this, SLOT(importPatterns()));
+	patternActionsToolBar->addAction(importAction);
+
 	connect(song, SIGNAL(projectLoaded()), this, SLOT(adjustUiAfterProjectLoad()));
 	connect(this, SIGNAL(resized()), m_editor, SLOT(updatePositionLine()));
 }
@@ -1131,6 +1168,274 @@ void SongEditorWindow::adjustUiAfterProjectLoad()
 			qobject_cast<QMdiSubWindow *>( parentWidget() ) );
 	connect( qobject_cast<SubWindow *>( parentWidget() ), SIGNAL(focusLost()), this, SLOT(lostFocus()));
 	m_editor->scrolled(0);
+}
+
+
+void SongEditorWindow::normalizePatternTrackNames()
+{
+	Track::normalizeTrackNames(Engine::getSong());
+	Engine::getSong()->setModified();
+}
+
+
+void SongEditorWindow::exportPatterns()
+{
+	// Normalize names before export
+	Track::normalizeTrackNames(Engine::getSong());
+	Track::normalizeTrackNames(Engine::patternStore());
+
+	// Build checkbox dialog listing all PatternTracks
+	QDialog selectionDialog(this);
+	selectionDialog.setWindowTitle(tr("Export patterns"));
+	selectionDialog.setSizeGripEnabled(true);
+	auto* layout = new QVBoxLayout(&selectionDialog);
+	layout->addWidget(new QLabel(tr("Select patterns to export:")));
+
+	auto* selectButtonLayout = new QHBoxLayout();
+	auto* selectAllBtn = new QPushButton(tr("Select all"), &selectionDialog);
+	auto* selectNoneBtn = new QPushButton(tr("Select none"), &selectionDialog);
+	selectButtonLayout->addWidget(selectAllBtn);
+	selectButtonLayout->addWidget(selectNoneBtn);
+	selectButtonLayout->addStretch();
+	layout->addLayout(selectButtonLayout);
+
+	auto* scrollArea = new QScrollArea(&selectionDialog);
+	scrollArea->setWidgetResizable(true);
+	scrollArea->setFrameShape(QFrame::NoFrame);
+	auto* scrollWidget = new QWidget();
+	auto* scrollLayout = new QVBoxLayout(scrollWidget);
+
+	QVector<QPair<PatternTrack*, QCheckBox*>> checkboxes;
+	for (const auto& track : Engine::getSong()->tracks())
+	{
+		if (track->type() != Track::Type::Pattern) { continue; }
+		auto* pt = dynamic_cast<PatternTrack*>(track);
+		if (!pt) { continue; }
+
+		auto* cb = new QCheckBox(pt->name(), scrollWidget);
+		scrollLayout->addWidget(cb);
+		checkboxes.append({pt, cb});
+	}
+	scrollLayout->addStretch();
+	scrollArea->setWidget(scrollWidget);
+	layout->addWidget(scrollArea, 1);
+
+	connect(selectAllBtn, &QPushButton::clicked, [&checkboxes]() {
+		for (const auto& pair : checkboxes) { pair.second->setChecked(true); }
+	});
+	connect(selectNoneBtn, &QPushButton::clicked, [&checkboxes]() {
+		for (const auto& pair : checkboxes) { pair.second->setChecked(false); }
+	});
+
+	auto* buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &selectionDialog);
+	connect(buttonBox, &QDialogButtonBox::accepted, &selectionDialog, &QDialog::accept);
+	connect(buttonBox, &QDialogButtonBox::rejected, &selectionDialog, &QDialog::reject);
+	layout->addWidget(buttonBox);
+
+	if (auto* screen = selectionDialog.screen())
+	{
+		const int maxHeight = screen->availableGeometry().height() * 2 / 3;
+		selectionDialog.setMaximumHeight(maxHeight);
+	}
+	selectionDialog.resize(selectionDialog.sizeHint().width(),
+		qMin(selectionDialog.sizeHint().height(), selectionDialog.maximumHeight()));
+
+	if (selectionDialog.exec() != QDialog::Accepted) { return; }
+
+	QVector<PatternTrack*> selectedTracks;
+	for (const auto& pair : checkboxes)
+	{
+		if (pair.second->isChecked()) { selectedTracks.append(pair.first); }
+	}
+	if (selectedTracks.isEmpty()) { return; }
+
+	const QString directory = FileDialog::getExistingDirectory(this, tr("Export patterns to directory"), "");
+	if (directory.isEmpty()) { return; }
+
+	// Export each selected PatternTrack
+	auto exportSinglePattern = [](int patternIndex, const QString& filePath)
+	{
+		DataFile dataFile(DataFile::Type::PatternData);
+		QDomDocument& doc = dataFile;
+		QDomElement& content = dataFile.content();
+
+		for (const auto& track : Engine::patternStore()->tracks())
+		{
+			QDomElement trackElement = doc.createElement("track");
+			trackElement.setAttribute("type", static_cast<int>(track->type()));
+			trackElement.setAttribute("name", track->name());
+			if (track->color().has_value())
+			{
+				trackElement.setAttribute("color", track->color()->name());
+			}
+
+			QDomElement settingsElement = doc.createElement(track->nodeName());
+			trackElement.appendChild(settingsElement);
+			track->saveTrackSpecificSettings(doc, settingsElement, false);
+
+			Clip* clip = track->getClip(static_cast<std::size_t>(patternIndex));
+			if (clip)
+			{
+				clip->saveState(doc, trackElement);
+			}
+
+			content.appendChild(trackElement);
+		}
+
+		dataFile.writeFile(filePath);
+	};
+
+	static const QRegularExpression unsafeChars(R"([\x00-\x1f"*/:<>?\\|\x7f])");
+
+	for (auto* pt : selectedTracks)
+	{
+		QString filename = pt->name();
+		filename.replace(' ', '_');
+		filename.remove(unsafeChars);
+		filename += ".xppt";
+		const QString filePath = QDir(directory).filePath(filename);
+		fprintf(stderr, "Exporting Pattern-track \"%s\" to %s\n",
+			pt->name().toUtf8().constData(),
+			filePath.toUtf8().constData());
+		exportSinglePattern(pt->patternIndex(), filePath);
+	}
+
+	fprintf(stderr, "Export complete.\n");
+	Engine::getSong()->setModified();
+}
+
+
+void SongEditorWindow::importPatterns()
+{
+	FileDialog ofd(this, tr("Import patterns"), "", tr("LMMS pattern file (*.xppt)"));
+	ofd.setAcceptMode(FileDialog::AcceptOpen);
+	ofd.setFileMode(FileDialog::ExistingFiles);
+
+	if (ofd.exec() != QDialog::Accepted
+		|| ofd.selectedFiles().isEmpty()
+		|| ofd.selectedFiles().first().isEmpty())
+	{
+		return;
+	}
+
+	const QStringList files = ofd.selectedFiles();
+
+	// Strip journallingObject metadata from imported XML
+	std::function<void(QDomElement&)> stripJournallingIDs = [&](QDomElement& parent)
+	{
+		QDomNode child = parent.firstChild();
+		while (!child.isNull())
+		{
+			QDomNode next = child.nextSibling();
+			QDomElement elem = child.toElement();
+			if (!elem.isNull())
+			{
+				if (elem.tagName() == "journallingObject")
+				{
+					parent.removeChild(child);
+				}
+				else
+				{
+					stripJournallingIDs(elem);
+				}
+			}
+			child = next;
+		}
+	};
+
+	auto importSingleFile = [&stripJournallingIDs](int patternIndex, const QString& filePath)
+	{
+		DataFile dataFile(filePath);
+		QDomElement content = dataFile.content();
+
+		stripJournallingIDs(content);
+
+		static const QStringList clipTagNames = {"midiclip", "sampleclip", "automationclip", "patternclip"};
+
+		QVector<QDomElement> fileTrackElements;
+		QDomNode node = content.firstChild();
+		while (!node.isNull())
+		{
+			QDomElement elem = node.toElement();
+			node = node.nextSibling();
+			if (!elem.isNull() && elem.tagName() == "track"
+				&& static_cast<Track::Type>(elem.attribute("type").toInt()) == Track::Type::Instrument)
+			{
+				fileTrackElements.append(elem);
+			}
+		}
+
+		const auto& existingTracks = Engine::patternStore()->tracks();
+
+		for (int i = 0; i < fileTrackElements.size(); ++i)
+		{
+			const QDomElement& trackElement = fileTrackElements[i];
+
+			Track* destTrack = nullptr;
+			if (i < static_cast<int>(existingTracks.size()))
+			{
+				destTrack = existingTracks[i];
+			}
+			else
+			{
+				destTrack = Track::create(Track::Type::Instrument, Engine::patternStore());
+				destTrack->setName(trackElement.attribute("name"));
+
+				QDomElement itElement = trackElement.firstChildElement("instrumenttrack");
+				if (!itElement.isNull())
+				{
+					auto instTrack = dynamic_cast<InstrumentTrack*>(destTrack);
+					if (instTrack)
+					{
+						instTrack->loadTrackSpecificSettings(itElement);
+					}
+				}
+			}
+
+			QDomElement clipElement;
+			QDomNode childNode = trackElement.firstChild();
+			while (!childNode.isNull())
+			{
+				QDomElement childElem = childNode.toElement();
+				if (!childElem.isNull() && clipTagNames.contains(childElem.tagName()))
+				{
+					clipElement = childElem;
+					break;
+				}
+				childNode = childNode.nextSibling();
+			}
+
+			if (!clipElement.isNull())
+			{
+				destTrack->createClipsForPattern(patternIndex);
+				Clip* destClip = destTrack->getClip(patternIndex);
+				if (destClip)
+				{
+					const TimePos savedPos = destClip->startPosition();
+					destClip->restoreState(clipElement);
+					destClip->movePosition(savedPos);
+				}
+			}
+		}
+	};
+
+	Engine::audioEngine()->requestChangeInModel();
+
+	// Each file creates a new PatternTrack and imports into it
+	for (int i = 0; i < files.size(); ++i)
+	{
+		auto* newTrack = Track::create(Track::Type::Pattern, Engine::getSong());
+		auto* newPatternTrack = dynamic_cast<PatternTrack*>(newTrack);
+		if (!newPatternTrack) { continue; }
+		const QString baseName = QFileInfo(files[i]).baseName();
+		fprintf(stderr, "[importPatterns] Setting PatternTrack name to '%s'\n", baseName.toUtf8().constData());
+		newPatternTrack->setName(baseName);
+		importSingleFile(newPatternTrack->patternIndex(), files[i]);
+	}
+
+	Engine::audioEngine()->doneChangeInModel();
+	Engine::patternStore()->updateComboBox();
+	Engine::getSong()->setModified();
 }
 
 

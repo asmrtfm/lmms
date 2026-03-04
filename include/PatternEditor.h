@@ -56,6 +56,7 @@ public:
 	void loadSettings(const QDomElement& element) override;
 
 public slots:
+	void resetSteps();
 	void addSteps();
 	void cloneSteps();
 	void removeSteps();
@@ -87,6 +88,9 @@ public:
 public slots:
 	void play() override;
 	void stop() override;
+
+protected slots:
+	void normalizeInstrumentTrackNames();
 
 private:
 	ComboBox* m_patternComboBox;

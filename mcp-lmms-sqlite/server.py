@@ -26,7 +26,7 @@ TOOLS_DIR = Path(__file__).parent.parent / "tools"
 
 mcp = FastMCP(
     "lmms-sqlite",
-    description=(
+    instructions=(
         "Manage LMMS projects (.lmms-db), presets, samples, and plugins via SQLite. "
         "Integrates with the SQLite project format from tools/lmms_convert.py."
     ),

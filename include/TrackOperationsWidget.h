@@ -35,13 +35,13 @@ namespace lmms::gui
 class PixmapButton;
 class TrackView;
 
+
 class TrackOperationsWidget : public QWidget
 {
 	Q_OBJECT
 public:
 	TrackOperationsWidget( TrackView * parent );
 	~TrackOperationsWidget() override = default;
-
 
 protected:
 	void mousePressEvent( QMouseEvent * me ) override;
@@ -61,6 +61,8 @@ private slots:
 	void recordingOn();
 	void recordingOff();
 	void clearTrack();
+	void exportPattern();
+	void importPattern();
 
 private:
 	TrackView * m_trackView;

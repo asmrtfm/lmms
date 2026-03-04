@@ -92,6 +92,8 @@ public:
 							TrackContainer * tc );
 	Track * clone();
 
+	static QString uniqueName(const QString& baseName, TrackContainer* tc);
+	static void normalizeTrackNames(TrackContainer* tc);
 
 	// pure virtual functions
 	Type type() const

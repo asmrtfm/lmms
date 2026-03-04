@@ -29,9 +29,11 @@
 #include "ClipView.h"
 #include "ComboBox.h"
 #include "DataFile.h"
+#include "Engine.h"
 #include "embed.h"
 #include "MainWindow.h"
 #include "PatternStore.h"
+#include "Track.h"
 #include "PatternTrack.h"
 #include "Song.h"
 #include "StringPairDrag.h"
@@ -53,6 +55,20 @@ PatternEditor::PatternEditor(PatternStore* ps) :
 
 
 
+
+void PatternEditor::resetSteps()
+{
+	const TrackContainer::TrackList& tl = model()->tracks();
+
+	for (const auto& track : tl)
+	{
+		if (track->type() == Track::Type::Instrument)
+		{
+			auto p = static_cast<MidiClip*>(track->getClip(m_ps->currentPattern()));
+			p->resetSteps();
+		}
+	}
+}
 
 void PatternEditor::addSteps()
 {
@@ -274,8 +290,12 @@ PatternEditorWindow::PatternEditorWindow(PatternStore* ps) :
 	stretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 	trackAndStepActionsToolBar->addWidget(stretch);
 
+	// Normalize instrument track names
+	trackAndStepActionsToolBar->addAction(tr("Normalize names"), this, SLOT(normalizeInstrumentTrackNames()));
 
 	// Step actions
+	trackAndStepActionsToolBar->addAction(embed::getIconPixmap("step_btn_reset"), tr("Reset steps"),
+						m_editor, SLOT(resetSteps()));
 	trackAndStepActionsToolBar->addAction(embed::getIconPixmap("step_btn_remove"), tr("Remove steps"),
 						m_editor, SLOT(removeSteps()));
 	trackAndStepActionsToolBar->addAction(embed::getIconPixmap("step_btn_add"), tr("Add steps"),
@@ -320,6 +340,12 @@ void PatternEditorWindow::play()
 void PatternEditorWindow::stop()
 {
 	Engine::getSong()->stop();
+}
+
+
+void PatternEditorWindow::normalizeInstrumentTrackNames()
+{
+	Track::normalizeTrackNames(Engine::patternStore());
 }
 
 

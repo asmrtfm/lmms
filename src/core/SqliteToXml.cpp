@@ -120,59 +120,183 @@ private:
 	sqlite3_stmt* m_stmt;
 };
 
+// Check if a table exists in the database (for backwards compatibility with v2 schemas)
+bool tableExists(sqlite3* db, const char* tableName)
+{
+	QString sql = QString("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='%1'").arg(tableName);
+	SqliteStmt stmt(db, sql.toUtf8().constData());
+	if (stmt.valid() && stmt.step())
+	{
+		return stmt.colInt(0) > 0;
+	}
+	return false;
+}
+
+// Check if a column exists in a table (for backwards compatibility)
+bool columnExists(sqlite3* db, const char* tableName, const char* columnName)
+{
+	QString sql = QString("PRAGMA table_info(%1)").arg(tableName);
+	SqliteStmt stmt(db, sql.toUtf8().constData());
+	while (stmt.valid() && stmt.step())
+	{
+		if (stmt.colText(1) == columnName) { return true; }
+	}
+	return false;
+}
+
+// Forward declaration for mutual recursion
+void jsonToXml(QDomDocument& doc, QDomElement& parent, const QJsonObject& obj);
+
+// Emit a single JSON key-value pair as an XML element, attribute, or text node
+void jsonKeyToXml(QDomDocument& doc, QDomElement& parent, const QString& key, const QJsonValue& val)
+{
+	if (val.isObject())
+	{
+		QDomElement child = doc.createElement(key);
+		QJsonObject childObj = val.toObject();
+		jsonToXml(doc, child, childObj);
+		parent.appendChild(child);
+	}
+	else if (val.isArray())
+	{
+		QJsonArray arr = val.toArray();
+		for (const auto& item : arr)
+		{
+			QDomElement child = doc.createElement(key);
+			if (item.isObject())
+			{
+				QJsonObject childObj = item.toObject();
+				jsonToXml(doc, child, childObj);
+			}
+			else
+			{
+				child.appendChild(doc.createTextNode(
+					item.isDouble()
+						? QString::number(item.toDouble(), 'g', 15)
+						: item.toString()));
+			}
+			parent.appendChild(child);
+		}
+	}
+	else if (val.isDouble())
+	{
+		double d = val.toDouble();
+		if (d == static_cast<double>(static_cast<long long>(d)) && d >= -1e15 && d <= 1e15)
+		{
+			parent.setAttribute(key, QString::number(static_cast<long long>(d)));
+		}
+		else
+		{
+			parent.setAttribute(key, QString::number(d, 'g', 15));
+		}
+	}
+	else
+	{
+		parent.setAttribute(key, val.toString());
+	}
+}
+
 // Convert a JSON object (parsed from a text column) into XML child elements/attributes
-// This is the C++ equivalent of dict_to_xml() in lmms_export.py
+// Uses _order array (if present) to preserve original XML element ordering
 void jsonToXml(QDomDocument& doc, QDomElement& parent, const QJsonObject& obj)
 {
+	// Reserved keys that are not emitted as elements/attributes
+	static const QSet<QString> reservedKeys = {"_order", "_text", "journallingObject"};
+
+	// First pass: emit attributes and text content (non-element keys)
 	for (auto it = obj.begin(); it != obj.end(); ++it)
 	{
 		const QString& key = it.key();
 		const QJsonValue& val = it.value();
 
-		if (val.isObject())
+		if (reservedKeys.contains(key)) { continue; }
+
+		// Only emit primitive values (attributes) in first pass
+		if (!val.isObject() && !val.isArray())
 		{
-			QDomElement child = doc.createElement(key);
-			QJsonObject childObj = val.toObject();
-			jsonToXml(doc, child, childObj);
-			parent.appendChild(child);
+			jsonKeyToXml(doc, parent, key, val);
 		}
-		else if (val.isArray())
+	}
+
+	// Restore text content
+	if (obj.contains("_text"))
+	{
+		parent.appendChild(doc.createTextNode(obj.value("_text").toString()));
+	}
+
+	// Second pass: emit child elements in preserved order (or alphabetical fallback)
+	QJsonArray order = obj.value("_order").toArray();
+	if (!order.isEmpty())
+	{
+		// _order contains every child occurrence in sequence (tags may repeat)
+		// For array-valued keys, consume elements one at a time in order
+		QMap<QString, int> arrayIndex; // tracks next index to consume per array key
+		QSet<QString> emittedSingles; // tracks non-array keys already emitted
+
+		for (const auto& item : order)
 		{
-			QJsonArray arr = val.toArray();
-			for (const auto& item : arr)
+			QString key = item.toString();
+			if (reservedKeys.contains(key) || !obj.contains(key)) { continue; }
+
+			const QJsonValue& val = obj.value(key);
+			if (val.isArray())
 			{
-				QDomElement child = doc.createElement(key);
-				if (item.isObject())
+				// Emit next element from the array
+				QJsonArray arr = val.toArray();
+				int idx = arrayIndex.value(key, 0);
+				if (idx < arr.size())
 				{
-					QJsonObject childObj = item.toObject();
-					jsonToXml(doc, child, childObj);
+					QDomElement child = doc.createElement(key);
+					const QJsonValue& arrItem = arr.at(idx);
+					if (arrItem.isObject())
+					{
+						jsonToXml(doc, child, arrItem.toObject());
+					}
+					else
+					{
+						child.appendChild(doc.createTextNode(
+							arrItem.isDouble()
+								? QString::number(arrItem.toDouble(), 'g', 15)
+								: arrItem.toString()));
+					}
+					parent.appendChild(child);
+					arrayIndex[key] = idx + 1;
 				}
-				else
+			}
+			else if (val.isObject())
+			{
+				if (!emittedSingles.contains(key))
 				{
-					child.appendChild(doc.createTextNode(
-						item.isDouble()
-							? QString::number(item.toDouble(), 'g', 15)
-							: item.toString()));
+					jsonKeyToXml(doc, parent, key, val);
+					emittedSingles.insert(key);
 				}
-				parent.appendChild(child);
 			}
 		}
-		else if (val.isDouble())
+
+		// Emit any remaining child elements not covered by _order (safety fallback)
+		QSet<QString> allOrdered;
+		for (const auto& item : order) { allOrdered.insert(item.toString()); }
+		for (auto it = obj.begin(); it != obj.end(); ++it)
 		{
-			// Check if it's actually an integer value
-			double d = val.toDouble();
-			if (d == static_cast<double>(static_cast<long long>(d)) && d >= -1e15 && d <= 1e15)
+			const QString& key = it.key();
+			if (reservedKeys.contains(key) || allOrdered.contains(key)) { continue; }
+			if (it.value().isObject() || it.value().isArray())
 			{
-				parent.setAttribute(key, QString::number(static_cast<long long>(d)));
-			}
-			else
-			{
-				parent.setAttribute(key, QString::number(d, 'g', 15));
+				jsonKeyToXml(doc, parent, key, it.value());
 			}
 		}
-		else
+	}
+	else
+	{
+		// No order info - emit child elements in default (alphabetical) order
+		for (auto it = obj.begin(); it != obj.end(); ++it)
 		{
-			parent.setAttribute(key, val.toString());
+			const QString& key = it.key();
+			if (reservedKeys.contains(key)) { continue; }
+			if (it.value().isObject() || it.value().isArray())
+			{
+				jsonKeyToXml(doc, parent, key, it.value());
+			}
 		}
 	}
 }
@@ -200,8 +324,7 @@ void applyJsonColumn(QDomDocument& doc, QDomElement& parent, const QString& json
 	}
 }
 
-// Apply extra_json: simple values as attributes, _children as child elements, other dicts as child elements
-// This mirrors apply_extra_json() from lmms_export.py
+// Apply extra_json: simple values as attributes, _children as child elements
 void applyExtraJson(QDomDocument& doc, QDomElement& elem, const QString& jsonText)
 {
 	if (jsonText.isEmpty() || jsonText == "{}")
@@ -233,7 +356,7 @@ void applyExtraJson(QDomDocument& doc, QDomElement& elem, const QString& jsonTex
 		}
 	}
 
-	// Apply remaining keys (attrs and dict/array child elements)
+	// Apply remaining keys
 	jsonToXml(doc, elem, obj);
 
 	// Apply _children as child elements
@@ -244,7 +367,6 @@ void applyExtraJson(QDomDocument& doc, QDomElement& elem, const QString& jsonTex
 }
 
 // Apply extra_json but only simple (non-dict, non-array) values as attributes
-// Used for track-level extras where we only want attributes like mutedBeforeSolo
 void applyExtraJsonAttrsOnly(QDomElement& elem, const QString& jsonText)
 {
 	if (jsonText.isEmpty() || jsonText == "{}")
@@ -289,8 +411,14 @@ void applyExtraJsonAttrsOnly(QDomElement& elem, const QString& jsonText)
 void exportEffects(sqlite3* db, QDomDocument& doc, QDomElement& parent,
 	const char* ownerType, int ownerId)
 {
-	SqliteStmt stmt(db,
-		"SELECT * FROM effect WHERE owner_type = ? AND owner_id = ? ORDER BY sort_order");
+	// Check if fxchain_enabled column exists (v3 schema)
+	bool hasFxchainEnabled = columnExists(db, "effect", "fxchain_enabled");
+
+	QString sql = hasFxchainEnabled
+		? "SELECT * FROM effect WHERE owner_type = ? AND owner_id = ? ORDER BY sort_order"
+		: "SELECT * FROM effect WHERE owner_type = ? AND owner_id = ? ORDER BY sort_order";
+
+	SqliteStmt stmt(db, sql.toUtf8().constData());
 	if (!stmt.valid()) { return; }
 
 	stmt.bindText(1, ownerType);
@@ -298,17 +426,33 @@ void exportEffects(sqlite3* db, QDomDocument& doc, QDomElement& parent,
 
 	QDomElement fxchain = doc.createElement("fxchain");
 	int count = 0;
+	int fxchainEnabled = 1;  // default
 
 	while (stmt.step())
 	{
+		QString pluginName = stmt.colText(3);  // plugin_name
+
+		// Read fxchain_enabled from first row (column 8 in v3 schema)
+		if (count == 0 && hasFxchainEnabled)
+		{
+			fxchainEnabled = stmt.colInt(8);
+		}
+
+		// Skip sentinel rows used to store fxchain metadata
+		if (pluginName == "_fxchain_metadata")
+		{
+			continue;
+		}
+
 		QDomElement fxElem = doc.createElement("effect");
-		fxElem.setAttribute("name", stmt.colText(3));  // plugin_name
+		fxElem.setAttribute("name", pluginName);
 		fxElem.setAttribute("on", stmt.colInt(5));      // enabled
 		fxElem.setAttribute("wet", QString::number(stmt.colDouble(6), 'g', 15)); // wet
 		fxElem.setAttribute("gate", QString::number(stmt.colDouble(7), 'g', 15)); // gate
 
-		// Plugin params from JSON — restore extra attrs, rename _key back to key
-		QString paramsJson = stmt.colText(8); // params_json
+		// Plugin params from JSON
+		int paramsIdx = hasFxchainEnabled ? 9 : 8;
+		QString paramsJson = stmt.colText(paramsIdx);
 		if (!paramsJson.isEmpty() && paramsJson != "{}")
 		{
 			QJsonParseError parseErr;
@@ -338,13 +482,16 @@ void exportEffects(sqlite3* db, QDomDocument& doc, QDomElement& parent,
 	}
 
 	fxchain.setAttribute("numofeffects", count);
-	fxchain.setAttribute("enabled", count > 0 ? 1 : 0);
+	fxchain.setAttribute("enabled", fxchainEnabled);
 	parent.appendChild(fxchain);
 }
 
-// Export project metadata into <head>
-void exportProjectMetadata(sqlite3* db, QDomDocument& doc, QDomElement& head)
+// Export project metadata into <head> and set root attributes
+void exportProjectMetadata(sqlite3* db, QDomDocument& doc, QDomElement& root, QDomElement& head)
 {
+	// Check if v3 columns exist
+	bool hasVersionCols = columnExists(db, "project", "lmms_version");
+
 	SqliteStmt stmt(db, "SELECT * FROM project WHERE id = 1");
 	if (!stmt.valid() || !stmt.step())
 	{
@@ -353,18 +500,99 @@ void exportProjectMetadata(sqlite3* db, QDomDocument& doc, QDomElement& head)
 	}
 
 	// Column indices: 0=id, 1=name, 2=bpm, 3=timesig_num, 4=timesig_denom,
-	//                 5=master_volume, 6=master_pitch, 7=created_at, 8=modified_at, 9=extra_json
+	//                 5=master_volume, 6=master_pitch
 	head.setAttribute("bpm", QString::number(stmt.colDouble(2), 'g', 15));
 	head.setAttribute("timesig_numerator", stmt.colInt(3));
 	head.setAttribute("timesig_denominator", stmt.colInt(4));
 	head.setAttribute("mastervol", QString::number(stmt.colDouble(5), 'g', 15));
 	head.setAttribute("masterpitch", QString::number(stmt.colDouble(6), 'g', 15));
 
-	// Restore extra head attributes from extra_json (column 9)
-	applyExtraJson(doc, head, stmt.colText(9));
+	// Root element attributes from v3 columns
+	if (hasVersionCols)
+	{
+		// 7=lmms_version, 8=project_type, 9=creator, 10=creator_version
+		root.setAttribute("version", stmt.colText(7));
+		root.setAttribute("type", stmt.colText(8));
+		root.setAttribute("creator", stmt.colText(9));
+		root.setAttribute("creatorversion", stmt.colText(10));
+		// 11=created_at, 12=modified_at, 13=extra_json
+		applyExtraJson(doc, head, stmt.colText(13));
+	}
+	else
+	{
+		// v2 schema: extra_json at column 9
+		applyExtraJson(doc, head, stmt.colText(9));
+	}
 
 	logMsg("Project: bpm=%g, time_sig=%d/%d",
 		stmt.colDouble(2), stmt.colInt(3), stmt.colInt(4));
+}
+
+// Export song UI elements (pianoroll, automationeditor, projectnotes, timeline, etc.)
+void exportSongUiElements(sqlite3* db, QDomDocument& doc, QDomElement& songElem)
+{
+	if (!tableExists(db, "song_ui_element")) { return; }
+
+	SqliteStmt stmt(db, "SELECT * FROM song_ui_element ORDER BY id");
+	if (!stmt.valid()) { return; }
+
+	while (stmt.step())
+	{
+		// 0=id, 1=element_name, 2=attributes_json, 3=children_json, 4=content_text
+		QString elemName = stmt.colText(1);
+		QDomElement elem = doc.createElement(elemName);
+
+		// Apply attributes
+		applyJsonColumn(doc, elem, stmt.colText(2));
+		// Apply children
+		applyJsonColumn(doc, elem, stmt.colText(3));
+
+		// Text/CDATA content (e.g. project notes)
+		if (!stmt.colIsNull(4))
+		{
+			QString contentText = stmt.colText(4);
+			if (!contentText.isEmpty())
+			{
+				elem.appendChild(doc.createCDATASection(contentText));
+			}
+		}
+
+		songElem.appendChild(elem);
+	}
+}
+
+// Get trackcontainer state from database, applying to element
+void applyTrackcontainerState(sqlite3* db, QDomElement& tcElem, const QString& containerType)
+{
+	if (!tableExists(db, "trackcontainer_state")) { return; }
+
+	SqliteStmt stmt(db, "SELECT * FROM trackcontainer_state WHERE container_type = ?");
+	if (!stmt.valid()) { return; }
+	stmt.bindText(1, containerType.toUtf8().constData());
+
+	if (stmt.step())
+	{
+		// 0=id, 1=container_type, 2=visible, 3=minimized, 4=maximized, 5=x, 6=y, 7=width, 8=height, 9=extra_json
+		tcElem.setAttribute("visible", stmt.colInt(2));
+		tcElem.setAttribute("minimized", stmt.colInt(3));
+		tcElem.setAttribute("maximized", stmt.colInt(4));
+		tcElem.setAttribute("x", stmt.colInt(5));
+		tcElem.setAttribute("y", stmt.colInt(6));
+		tcElem.setAttribute("width", stmt.colInt(7));
+		tcElem.setAttribute("height", stmt.colInt(8));
+		applyExtraJsonAttrsOnly(tcElem, stmt.colText(9));
+	}
+	else
+	{
+		// Defaults if no state stored
+		tcElem.setAttribute("visible", 1);
+		tcElem.setAttribute("minimized", 0);
+		tcElem.setAttribute("maximized", containerType == "patternstore" ? 1 : 0);
+		tcElem.setAttribute("x", 0);
+		tcElem.setAttribute("y", 0);
+		tcElem.setAttribute("width", containerType == "patternstore" ? 1527 : 1600);
+		tcElem.setAttribute("height", containerType == "patternstore" ? 768 : 900);
+	}
 }
 
 // Export mixer channels and routing
@@ -374,6 +602,25 @@ void exportMixer(sqlite3* db, QDomDocument& doc, QDomElement& songElem)
 	if (!chStmt.valid()) { return; }
 
 	QDomElement mixerElem = doc.createElement("mixer");
+
+	// Restore mixer window state
+	if (tableExists(db, "mixer_state"))
+	{
+		SqliteStmt msStmt(db, "SELECT * FROM mixer_state WHERE id = 1");
+		if (msStmt.valid() && msStmt.step())
+		{
+			// 0=id, 1=visible, 2=minimized, 3=maximized, 4=x, 5=y, 6=width, 7=height, 8=extra_json
+			mixerElem.setAttribute("visible", msStmt.colInt(1));
+			mixerElem.setAttribute("minimized", msStmt.colInt(2));
+			mixerElem.setAttribute("maximized", msStmt.colInt(3));
+			mixerElem.setAttribute("x", msStmt.colInt(4));
+			mixerElem.setAttribute("y", msStmt.colInt(5));
+			mixerElem.setAttribute("width", msStmt.colInt(6));
+			mixerElem.setAttribute("height", msStmt.colInt(7));
+			applyExtraJsonAttrsOnly(mixerElem, msStmt.colText(8));
+		}
+	}
+
 	int channelCount = 0;
 
 	while (chStmt.step())
@@ -390,7 +637,7 @@ void exportMixer(sqlite3* db, QDomDocument& doc, QDomElement& songElem)
 			chElem.setAttribute("color", chStmt.colText(5));
 		}
 
-		// Restore extra mixer channel attributes and children (column 7)
+		// Restore extra mixer channel attributes and children
 		applyExtraJson(doc, chElem, chStmt.colText(7));
 
 		// Effects chain
@@ -411,6 +658,44 @@ void exportMixer(sqlite3* db, QDomDocument& doc, QDomElement& songElem)
 			}
 		}
 
+		// Controller connections on this mixer channel
+		if (tableExists(db, "controller_connection"))
+		{
+			SqliteStmt ccStmt(db,
+				"SELECT * FROM controller_connection WHERE owner_type = 'mixer_channel' AND owner_id = ?");
+			if (ccStmt.valid())
+			{
+				ccStmt.bindInt(1, chId);
+				// Group connections by param_name under a <connection> element
+				QDomElement connElem;
+				bool hasConn = false;
+				while (ccStmt.step())
+				{
+					if (!hasConn)
+					{
+						connElem = doc.createElement("connection");
+						hasConn = true;
+					}
+					// 0=id, 1=owner_type, 2=owner_id, 3=param_name, 4=controller_id, 5=connection_json
+					QString paramName = ccStmt.colText(3);
+					QDomElement paramElem = doc.createElement(paramName);
+					// Restore controller connection from JSON
+					QString connJson = ccStmt.colText(5);
+					if (!connJson.isEmpty() && connJson != "{}")
+					{
+						QDomElement ctrlConnElem = doc.createElement("Midicontroller");
+						applyJsonColumn(doc, ctrlConnElem, connJson);
+						paramElem.appendChild(ctrlConnElem);
+					}
+					connElem.appendChild(paramElem);
+				}
+				if (hasConn)
+				{
+					chElem.appendChild(connElem);
+				}
+			}
+		}
+
 		mixerElem.appendChild(chElem);
 		channelCount++;
 	}
@@ -426,45 +711,42 @@ void exportMixer(sqlite3* db, QDomDocument& doc, QDomElement& songElem)
 QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 	QDomElement& parent, SqliteStmt& itStmt)
 {
-	// Column indices for instrument_track:
-	// 0=id, 1=name, 2=volume, 3=panning, 4=pitch, 5=pitch_range,
-	// 6=mixer_channel_id, 7=base_note, 8=use_master_pitch,
-	// 9=muted, 10=solo, 11=color, 12=sort_order,
-	// 13=instrument_plugin, 14=instrument_params_json,
-	// 15=sound_shaping_json, 16=arpeggio_json, 17=chord_creator_json,
-	// 18=midi_port_json, 19=microtuner_json,
-	// 20=track_extra_json, 21=instrumenttrack_extra_json
+	// Column indices depend on whether container_type column exists (v3 vs v2 schema)
+	// v3: 0=id, 1=container_type, 2=name, 3=volume, ... (all shifted +1 from v2)
+	// v2: 0=id, 1=name, 2=volume, ...
+	bool hasContainerType = columnExists(db, "instrument_track", "container_type");
+	int off = hasContainerType ? 1 : 0;  // column offset for v3 schema
 
 	int itId = itStmt.colInt(0);
 
 	QDomElement trackElem = doc.createElement("track");
 	trackElem.setAttribute("type", 0);
-	trackElem.setAttribute("name", itStmt.colText(1));
-	trackElem.setAttribute("muted", itStmt.colInt(9));
-	trackElem.setAttribute("solo", itStmt.colInt(10));
-	if (!itStmt.colIsNull(11))
+	trackElem.setAttribute("name", itStmt.colText(1 + off));
+	trackElem.setAttribute("muted", itStmt.colInt(9 + off));
+	trackElem.setAttribute("solo", itStmt.colInt(10 + off));
+	if (!itStmt.colIsNull(11 + off))
 	{
-		trackElem.setAttribute("color", itStmt.colText(11));
+		trackElem.setAttribute("color", itStmt.colText(11 + off));
 	}
 
-	// Restore extra <track> attributes (mutedBeforeSolo, etc.) from track_extra_json (column 20)
-	applyExtraJsonAttrsOnly(trackElem, itStmt.colText(20));
+	// Restore extra <track> attributes from track_extra_json
+	applyExtraJsonAttrsOnly(trackElem, itStmt.colText(20 + off));
 
 	// <instrumenttrack> settings element
 	QDomElement itElem = doc.createElement("instrumenttrack");
-	itElem.setAttribute("vol", QString::number(itStmt.colDouble(2), 'g', 15));
-	itElem.setAttribute("pan", QString::number(itStmt.colDouble(3), 'g', 15));
-	itElem.setAttribute("pitch", QString::number(itStmt.colDouble(4), 'g', 15));
-	itElem.setAttribute("pitchrange", itStmt.colInt(5));
-	if (!itStmt.colIsNull(6))
+	itElem.setAttribute("vol", QString::number(itStmt.colDouble(2 + off), 'g', 15));
+	itElem.setAttribute("pan", QString::number(itStmt.colDouble(3 + off), 'g', 15));
+	itElem.setAttribute("pitch", QString::number(itStmt.colDouble(4 + off), 'g', 15));
+	itElem.setAttribute("pitchrange", itStmt.colInt(5 + off));
+	if (!itStmt.colIsNull(6 + off))
 	{
-		itElem.setAttribute("mixch", itStmt.colInt(6));
+		itElem.setAttribute("mixch", itStmt.colInt(6 + off));
 	}
-	itElem.setAttribute("basenote", itStmt.colInt(7));
-	itElem.setAttribute("usemasterpitch", itStmt.colInt(8));
+	itElem.setAttribute("basenote", itStmt.colInt(7 + off));
+	itElem.setAttribute("usemasterpitch", itStmt.colInt(8 + off));
 
-	// Parse instrumenttrack_extra_json (column 21) — we'll apply attrs now and children later
-	QString itExtrasJson = itStmt.colText(21);
+	// Parse instrumenttrack_extra_json -- apply attrs now, children later
+	QString itExtrasJson = itStmt.colText(21 + off);
 	QJsonObject itExtrasChildren;
 	bool hasItExtrasChildren = false;
 	if (!itExtrasJson.isEmpty() && itExtrasJson != "{}")
@@ -474,7 +756,6 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 		if (parseErr.error == QJsonParseError::NoError && jdoc.isObject())
 		{
 			QJsonObject obj = jdoc.object();
-			// Extract _children before applying
 			if (obj.contains("_children"))
 			{
 				QJsonValue childrenVal = obj.take("_children");
@@ -484,7 +765,6 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 					hasItExtrasChildren = true;
 				}
 			}
-			// Apply non-dict, non-array values as attributes (enablecc, firstkey, lastkey, etc.)
 			for (auto it = obj.begin(); it != obj.end(); ++it)
 			{
 				const QJsonValue& val = it.value();
@@ -509,12 +789,11 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 		}
 	}
 
-	// Instrument plugin — params must be a child element named after the plugin
-	// e.g. <instrument name="tripleoscillator"><tripleoscillator vol0="100" .../></instrument>
-	QString pluginName = itStmt.colText(13);
+	// Instrument plugin
+	QString pluginName = itStmt.colText(13 + off);
 	QDomElement instrumentElem = doc.createElement("instrument");
 	instrumentElem.setAttribute("name", pluginName);
-	QString pluginParamsJson = itStmt.colText(14);
+	QString pluginParamsJson = itStmt.colText(14 + off);
 	if (!pluginParamsJson.isEmpty() && pluginParamsJson != "{}")
 	{
 		QJsonParseError parseErr;
@@ -522,7 +801,6 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 		if (parseErr.error == QJsonParseError::NoError && jdoc.isObject())
 		{
 			QJsonObject obj = jdoc.object();
-			// Extract _key and emit as <key> sibling of plugin element
 			QJsonValue keyVal;
 			if (obj.contains("_key"))
 			{
@@ -531,7 +809,6 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 			QDomElement pluginChild = doc.createElement(pluginName);
 			jsonToXml(doc, pluginChild, obj);
 			instrumentElem.appendChild(pluginChild);
-			// Emit <key> element if present
 			if (keyVal.isObject())
 			{
 				QDomElement keyElem = doc.createElement("key");
@@ -544,7 +821,7 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 	itElem.appendChild(instrumentElem);
 
 	// Sound shaping (eldata)
-	QString soundShapingJson = itStmt.colText(15);
+	QString soundShapingJson = itStmt.colText(15 + off);
 	if (!soundShapingJson.isEmpty() && soundShapingJson != "{}")
 	{
 		QDomElement eldataElem = doc.createElement("eldata");
@@ -553,7 +830,7 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 	}
 
 	// Chord creator
-	QString chordJson = itStmt.colText(17);
+	QString chordJson = itStmt.colText(17 + off);
 	if (!chordJson.isEmpty() && chordJson != "{}")
 	{
 		QDomElement chordElem = doc.createElement("chordcreator");
@@ -562,7 +839,7 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 	}
 
 	// Arpeggiator
-	QString arpJson = itStmt.colText(16);
+	QString arpJson = itStmt.colText(16 + off);
 	if (!arpJson.isEmpty() && arpJson != "{}")
 	{
 		QDomElement arpElem = doc.createElement("arpeggiator");
@@ -571,7 +848,7 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 	}
 
 	// MIDI port
-	QString midiJson = itStmt.colText(18);
+	QString midiJson = itStmt.colText(18 + off);
 	if (!midiJson.isEmpty() && midiJson != "{}")
 	{
 		QDomElement midiElem = doc.createElement("midiport");
@@ -580,7 +857,7 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 	}
 
 	// Microtuner
-	QString microtunerJson = itStmt.colText(19);
+	QString microtunerJson = itStmt.colText(19 + off);
 	if (!microtunerJson.isEmpty() && microtunerJson != "{}")
 	{
 		QDomElement microtunerElem = doc.createElement("microtuner");
@@ -588,7 +865,7 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 		itElem.appendChild(microtunerElem);
 	}
 
-	// Apply instrumenttrack extra _children (midicontrollers, etc.) after all known children
+	// Apply instrumenttrack extra _children after all known children
 	if (hasItExtrasChildren)
 	{
 		jsonToXml(doc, itElem, itExtrasChildren);
@@ -606,7 +883,12 @@ QDomElement buildInstrumentTrackElement(sqlite3* db, QDomDocument& doc,
 void exportPatternstore(sqlite3* db, QDomDocument& doc, QDomElement& patternstoreElem,
 	const QMap<int, int>& patternIdToIndex)
 {
-	SqliteStmt itStmt(db, "SELECT * FROM instrument_track ORDER BY sort_order");
+	// Only export patternstore instrument tracks (container_type check with fallback for v2 schema)
+	bool hasContainerType = columnExists(db, "instrument_track", "container_type");
+	QString itSql = hasContainerType
+		? "SELECT * FROM instrument_track WHERE container_type = 'patternstore' ORDER BY sort_order"
+		: "SELECT * FROM instrument_track ORDER BY sort_order";
+	SqliteStmt itStmt(db, itSql.toUtf8().constData());
 	if (!itStmt.valid()) { return; }
 
 	int trackCount = 0;
@@ -625,6 +907,17 @@ void exportPatternstore(sqlite3* db, QDomDocument& doc, QDomElement& patternstor
 		if (!mcStmt.valid()) { continue; }
 		mcStmt.bindInt(1, itId);
 
+		// midi_clip columns: 0=id, 1=instrument_track_id, 2=pattern_id,
+		// 3=position, 4=length, 5=clip_type, 6=steps, 7=muted, 8=name, 9=color, 10=extra_json
+		// (joined column: 11=pattern_sort_order)
+		bool mcHasPosition = columnExists(db, "midi_clip", "position");
+		int mcTypeIdx = mcHasPosition ? 5 : 3;
+		int mcStepsIdx = mcHasPosition ? 6 : 4;
+		int mcMutedIdx = mcHasPosition ? 7 : 5;
+		int mcNameIdx = mcHasPosition ? 8 : 6;
+		int mcColorIdx = mcHasPosition ? 9 : 7;
+		int mcExtraIdx = mcHasPosition ? 10 : 8;
+
 		while (mcStmt.step())
 		{
 			int patternId = mcStmt.colInt(2); // pattern_id
@@ -632,18 +925,18 @@ void exportPatternstore(sqlite3* db, QDomDocument& doc, QDomElement& patternstor
 			int pos = patternIdx * DEFAULT_PATTERN_LENGTH;
 
 			QDomElement mcElem = doc.createElement("midiclip");
-			mcElem.setAttribute("type", mcStmt.colInt(3));   // clip_type
-			mcElem.setAttribute("name", mcStmt.colText(6));  // name
+			mcElem.setAttribute("type", mcStmt.colInt(mcTypeIdx));
+			mcElem.setAttribute("name", mcStmt.colText(mcNameIdx));
 			mcElem.setAttribute("pos", pos);
-			mcElem.setAttribute("muted", mcStmt.colInt(5));  // muted
-			mcElem.setAttribute("steps", mcStmt.colInt(4));  // steps
-			if (!mcStmt.colIsNull(7))
+			mcElem.setAttribute("muted", mcStmt.colInt(mcMutedIdx));
+			mcElem.setAttribute("steps", mcStmt.colInt(mcStepsIdx));
+			if (!mcStmt.colIsNull(mcColorIdx))
 			{
-				mcElem.setAttribute("color", mcStmt.colText(7));
+				mcElem.setAttribute("color", mcStmt.colText(mcColorIdx));
 			}
 
-			// Restore extra midi clip attributes (column 8: extra_json)
-			applyExtraJson(doc, mcElem, mcStmt.colText(8));
+			// Restore extra midi clip attributes
+			applyExtraJson(doc, mcElem, mcStmt.colText(mcExtraIdx));
 
 			// Notes
 			SqliteStmt noteStmt(db,
@@ -662,10 +955,10 @@ void exportPatternstore(sqlite3* db, QDomDocument& doc, QDomElement& patternstor
 					noteElem.setAttribute("pan", noteStmt.colInt(6));    // panning
 					noteElem.setAttribute("type", noteStmt.colInt(7));   // note_type
 
-					// Restore extra note attributes (column 8: extra_json)
+					// Restore extra note attributes
 					applyExtraJson(doc, noteElem, noteStmt.colText(8));
 
-					// Note detuning (rare)
+					// Note detuning
 					SqliteStmt dtStmt(db,
 						"SELECT * FROM note_detuning WHERE note_id = ? ORDER BY position");
 					if (dtStmt.valid())
@@ -739,14 +1032,19 @@ void exportPatternTracks(sqlite3* db, QDomDocument& doc, QDomElement& songTc,
 		trackElem.setAttribute("name", ptStmt.colText(1));
 		trackElem.setAttribute("muted", ptStmt.colInt(2));
 		trackElem.setAttribute("solo", ptStmt.colInt(3));
-		trackElem.setAttribute("mutedBeforeSolo", 0);
 		if (!ptStmt.colIsNull(4))
 		{
 			trackElem.setAttribute("color", ptStmt.colText(4));
 		}
 
-		// Restore extra pattern track attributes (column 6: extra_json)
+		// Restore extra pattern track attributes
 		applyExtraJson(doc, trackElem, ptStmt.colText(6));
+
+		// Ensure mutedBeforeSolo exists (LMMS expects it)
+		if (!trackElem.hasAttribute("mutedBeforeSolo"))
+		{
+			trackElem.setAttribute("mutedBeforeSolo", 0);
+		}
 
 		QDomElement ptSettings = doc.createElement("patterntrack");
 
@@ -778,7 +1076,7 @@ void exportPatternTracks(sqlite3* db, QDomDocument& doc, QDomElement& songTc,
 					clipElem.setAttribute("color", clipStmt.colText(8));
 				}
 
-				// Restore extra pattern clip attributes (column 9: extra_json)
+				// Restore extra pattern clip attributes
 				applyExtraJson(doc, clipElem, clipStmt.colText(9));
 
 				trackElem.appendChild(clipElem);
@@ -792,11 +1090,34 @@ void exportPatternTracks(sqlite3* db, QDomDocument& doc, QDomElement& songTc,
 	logMsg("Pattern tracks: %d tracks", trackCount);
 }
 
-// Export automation tracks
-void exportAutomationTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentElem)
+// Export automation tracks filtered by container type
+void exportAutomationTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentElem,
+	const QString& containerType = "song_tc")
 {
-	SqliteStmt atStmt(db, "SELECT * FROM automation_track ORDER BY sort_order");
+	// Use container_type column if it exists, otherwise export all to song_tc only
+	bool hasContainerType = columnExists(db, "automation_track", "container_type");
+	if (!hasContainerType && containerType != "song_tc")
+	{
+		// Old DBs without container_type - only export for song_tc caller
+		return;
+	}
+	QString sql = hasContainerType
+		? "SELECT * FROM automation_track WHERE container_type = ? ORDER BY sort_order"
+		: "SELECT * FROM automation_track ORDER BY sort_order";
+	SqliteStmt atStmt(db, sql.toUtf8().constData());
+	if (hasContainerType)
+	{
+		atStmt.bindText(1, containerType.toUtf8().constData());
+	}
 	if (!atStmt.valid()) { return; }
+
+	// Column indices depend on schema version
+	// New schema: id(0), name(1), muted(2), solo(3), color(4), sort_order(5),
+	//             track_type(6), container_type(7), extra_json(8)
+	// Old schema: id(0), name(1), muted(2), solo(3), color(4), sort_order(5), extra_json(6)
+	bool hasTrackType = columnExists(db, "automation_track", "track_type");
+	int extraJsonCol = hasContainerType ? (hasTrackType ? 8 : 7) : 6;
+	int trackTypeCol = hasTrackType ? 6 : -1;
 
 	int trackCount = 0;
 	while (atStmt.step())
@@ -804,18 +1125,24 @@ void exportAutomationTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentE
 		int atId = atStmt.colInt(0);
 
 		QDomElement trackElem = doc.createElement("track");
-		trackElem.setAttribute("type", 5);
+		// Restore original track type (5=Automation, 6=HiddenAutomation)
+		int trackType = (trackTypeCol >= 0) ? atStmt.colInt(trackTypeCol) : 5;
+		trackElem.setAttribute("type", trackType);
 		trackElem.setAttribute("name", atStmt.colText(1));
 		trackElem.setAttribute("muted", atStmt.colInt(2));
 		trackElem.setAttribute("solo", atStmt.colInt(3));
-		trackElem.setAttribute("mutedBeforeSolo", 0);
 		if (!atStmt.colIsNull(4))
 		{
 			trackElem.setAttribute("color", atStmt.colText(4));
 		}
 
-		// Restore extra automation track attributes (column 6: extra_json)
-		applyExtraJson(doc, trackElem, atStmt.colText(6));
+		// Restore extra automation track attributes
+		applyExtraJson(doc, trackElem, atStmt.colText(extraJsonCol));
+
+		if (!trackElem.hasAttribute("mutedBeforeSolo"))
+		{
+			trackElem.setAttribute("mutedBeforeSolo", 0);
+		}
 
 		QDomElement atSettings = doc.createElement("automationtrack");
 		trackElem.appendChild(atSettings);
@@ -843,7 +1170,7 @@ void exportAutomationTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentE
 					clipElem.setAttribute("color", clipStmt.colText(8));
 				}
 
-				// Restore extra automation clip attributes (column 9: extra_json)
+				// Restore extra automation clip attributes
 				applyExtraJson(doc, clipElem, clipStmt.colText(9));
 
 				// Time nodes
@@ -869,7 +1196,7 @@ void exportAutomationTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentE
 					}
 				}
 
-				// Automation targets (object references)
+				// Automation targets
 				SqliteStmt targetStmt(db,
 					"SELECT * FROM automation_target WHERE automation_clip_id = ?");
 				if (targetStmt.valid())
@@ -878,7 +1205,7 @@ void exportAutomationTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentE
 					while (targetStmt.step())
 					{
 						QDomElement objElem = doc.createElement("object");
-						objElem.setAttribute("id", targetStmt.colInt(2)); // target_object_id
+						objElem.setAttribute("id", targetStmt.colInt(2));
 						clipElem.appendChild(objElem);
 					}
 				}
@@ -913,14 +1240,18 @@ void exportSampleTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentElem)
 		trackElem.setAttribute("name", stStmt.colText(1));
 		trackElem.setAttribute("muted", stStmt.colInt(5));
 		trackElem.setAttribute("solo", stStmt.colInt(6));
-		trackElem.setAttribute("mutedBeforeSolo", 0);
 		if (!stStmt.colIsNull(7))
 		{
 			trackElem.setAttribute("color", stStmt.colText(7));
 		}
 
-		// Restore extra sample track attributes (column 9: extra_json)
+		// Restore extra sample track attributes
 		applyExtraJson(doc, trackElem, stStmt.colText(9));
+
+		if (!trackElem.hasAttribute("mutedBeforeSolo"))
+		{
+			trackElem.setAttribute("mutedBeforeSolo", 0);
+		}
 
 		QDomElement stElem = doc.createElement("sampletrack");
 		stElem.setAttribute("vol",
@@ -954,7 +1285,7 @@ void exportSampleTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentElem)
 					clipElem.setAttribute("color", clipStmt.colText(7));
 				}
 
-				// Restore extra sample clip attributes (column 8: extra_json)
+				// Restore extra sample clip attributes
 				applyExtraJson(doc, clipElem, clipStmt.colText(8));
 
 				trackElem.appendChild(clipElem);
@@ -968,6 +1299,79 @@ void exportSampleTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentElem)
 	if (trackCount > 0)
 	{
 		logMsg("Sample tracks: %d tracks", trackCount);
+	}
+}
+
+// Export song-level instrument tracks (type=0 tracks in song trackcontainer)
+void exportSongInstrumentTracks(sqlite3* db, QDomDocument& doc, QDomElement& songTc)
+{
+	if (!columnExists(db, "instrument_track", "container_type")) { return; }
+
+	SqliteStmt itStmt(db,
+		"SELECT * FROM instrument_track WHERE container_type = 'song' ORDER BY sort_order");
+	if (!itStmt.valid()) { return; }
+
+	int trackCount = 0;
+	while (itStmt.step())
+	{
+		int itId = itStmt.colInt(0);
+		QDomElement trackElem = buildInstrumentTrackElement(db, doc, songTc, itStmt);
+
+		// Add midiclips (song-level clips with position/length, no pattern_id)
+		SqliteStmt mcStmt(db,
+			"SELECT * FROM midi_clip WHERE instrument_track_id = ? AND pattern_id IS NULL ORDER BY position");
+		if (!mcStmt.valid()) { continue; }
+		mcStmt.bindInt(1, itId);
+
+		while (mcStmt.step())
+		{
+			// midi_clip columns: 0=id, 1=instrument_track_id, 2=pattern_id,
+			// 3=position, 4=length, 5=clip_type, 6=steps, 7=muted, 8=name, 9=color, 10=extra_json
+			QDomElement mcElem = doc.createElement("midiclip");
+			mcElem.setAttribute("pos", mcStmt.colInt(3));
+			if (mcStmt.colInt(4) > 0)
+			{
+				mcElem.setAttribute("len", mcStmt.colInt(4));
+			}
+			mcElem.setAttribute("type", mcStmt.colInt(5));
+			mcElem.setAttribute("name", mcStmt.colText(8));
+			mcElem.setAttribute("muted", mcStmt.colInt(7));
+			mcElem.setAttribute("steps", mcStmt.colInt(6));
+			if (!mcStmt.colIsNull(9))
+			{
+				mcElem.setAttribute("color", mcStmt.colText(9));
+			}
+			applyExtraJson(doc, mcElem, mcStmt.colText(10));
+
+			// Notes
+			SqliteStmt noteStmt(db,
+				"SELECT * FROM note WHERE midi_clip_id = ? ORDER BY position");
+			if (noteStmt.valid())
+			{
+				noteStmt.bindInt(1, mcStmt.colInt(0));
+				while (noteStmt.step())
+				{
+					QDomElement noteElem = doc.createElement("note");
+					noteElem.setAttribute("pos", noteStmt.colInt(2));
+					noteElem.setAttribute("len", noteStmt.colInt(3));
+					noteElem.setAttribute("key", noteStmt.colInt(4));
+					noteElem.setAttribute("vol", noteStmt.colInt(5));
+					noteElem.setAttribute("pan", noteStmt.colInt(6));
+					noteElem.setAttribute("type", noteStmt.colInt(7));
+					applyExtraJson(doc, noteElem, noteStmt.colText(8));
+					mcElem.appendChild(noteElem);
+				}
+			}
+
+			trackElem.appendChild(mcElem);
+		}
+
+		trackCount++;
+	}
+
+	if (trackCount > 0)
+	{
+		logMsg("Song instrument tracks: %d tracks", trackCount);
 	}
 }
 
@@ -989,10 +1393,84 @@ void exportControllers(sqlite3* db, QDomDocument& doc, QDomElement& songElem)
 		count++;
 	}
 
+	// Always emit <controllers> (LMMS expects it even when empty)
+	songElem.appendChild(controllersElem);
 	if (count > 0)
 	{
-		songElem.appendChild(controllersElem);
 		logMsg("Controllers: %d", count);
+	}
+}
+
+// Export scales and keymaps
+void exportScalesAndKeymaps(sqlite3* db, QDomDocument& doc, QDomElement& songElem)
+{
+	// Scales
+	if (tableExists(db, "scale"))
+	{
+		SqliteStmt stmt(db, "SELECT * FROM scale ORDER BY sort_order");
+		if (stmt.valid())
+		{
+			QDomElement scalesElem = doc.createElement("scales");
+			int count = 0;
+			while (stmt.step())
+			{
+				// 0=id, 1=description, 2=intervals_json, 3=sort_order
+				QDomElement scaleElem = doc.createElement("scale");
+				scaleElem.setAttribute("description", stmt.colText(1));
+
+				// Parse intervals array
+				QString intervalsJson = stmt.colText(2);
+				if (!intervalsJson.isEmpty() && intervalsJson != "[]")
+				{
+					QJsonParseError err;
+					QJsonDocument jdoc = QJsonDocument::fromJson(intervalsJson.toUtf8(), &err);
+					if (err.error == QJsonParseError::NoError && jdoc.isArray())
+					{
+						for (const auto& item : jdoc.array())
+						{
+							if (item.isObject())
+							{
+								QJsonObject intObj = item.toObject();
+								QDomElement intElem = doc.createElement("interval");
+								intElem.setAttribute("num", intObj.value("num").toString());
+								intElem.setAttribute("den", intObj.value("den").toString());
+								scaleElem.appendChild(intElem);
+							}
+						}
+					}
+				}
+
+				scalesElem.appendChild(scaleElem);
+				count++;
+			}
+			if (count > 0) { songElem.appendChild(scalesElem); }
+		}
+	}
+
+	// Keymaps
+	if (tableExists(db, "keymap"))
+	{
+		SqliteStmt stmt(db, "SELECT * FROM keymap ORDER BY sort_order");
+		if (stmt.valid())
+		{
+			QDomElement keymapsElem = doc.createElement("keymaps");
+			int count = 0;
+			while (stmt.step())
+			{
+				// 0=id, 1=description, 2=base_key, 3=base_freq, 4=first_key, 5=last_key, 6=middle_key, 7=sort_order, 8=extra_json
+				QDomElement kmElem = doc.createElement("keymap");
+				kmElem.setAttribute("description", stmt.colText(1));
+				kmElem.setAttribute("base_key", stmt.colInt(2));
+				kmElem.setAttribute("base_freq", QString::number(stmt.colDouble(3), 'g', 15));
+				kmElem.setAttribute("first_key", stmt.colInt(4));
+				kmElem.setAttribute("last_key", stmt.colInt(5));
+				kmElem.setAttribute("middle_key", stmt.colInt(6));
+				applyExtraJsonAttrsOnly(kmElem, stmt.colText(8));
+				keymapsElem.appendChild(kmElem);
+				count++;
+			}
+			if (count > 0) { songElem.appendChild(keymapsElem); }
+		}
 	}
 }
 
@@ -1039,15 +1517,16 @@ QByteArray SqliteToXml::convert(const QString& dbPath)
 	doc.appendChild(xmlDecl);
 
 	QDomElement root = doc.createElement("lmms-project");
+	// Default root attributes (may be overridden by exportProjectMetadata)
 	root.setAttribute("version", "30");
 	root.setAttribute("type", "song");
 	root.setAttribute("creator", "LMMS");
 	root.setAttribute("creatorversion", "1.3.0-alpha");
 	doc.appendChild(root);
 
-	// <head>
+	// <head> — also sets root attributes from v3 schema
 	QDomElement head = doc.createElement("head");
-	exportProjectMetadata(db, doc, head);
+	exportProjectMetadata(db, doc, root, head);
 	root.appendChild(head);
 
 	// <song>
@@ -1056,24 +1535,12 @@ QByteArray SqliteToXml::convert(const QString& dbPath)
 	// Song trackcontainer
 	QDomElement songTc = doc.createElement("trackcontainer");
 	songTc.setAttribute("type", "song");
-	songTc.setAttribute("visible", 1);
-	songTc.setAttribute("minimized", 0);
-	songTc.setAttribute("maximized", 0);
-	songTc.setAttribute("x", 0);
-	songTc.setAttribute("y", 0);
-	songTc.setAttribute("width", 1600);
-	songTc.setAttribute("height", 900);
+	applyTrackcontainerState(db, songTc, "song");
 
 	// Build patternstore as a detached element
 	QDomElement patternstore = doc.createElement("trackcontainer");
 	patternstore.setAttribute("type", "patternstore");
-	patternstore.setAttribute("visible", 1);
-	patternstore.setAttribute("minimized", 0);
-	patternstore.setAttribute("maximized", 1);
-	patternstore.setAttribute("x", 0);
-	patternstore.setAttribute("y", 0);
-	patternstore.setAttribute("width", 1527);
-	patternstore.setAttribute("height", 768);
+	applyTrackcontainerState(db, patternstore, "patternstore");
 
 	// Populate patternstore with instrument tracks
 	exportPatternstore(db, doc, patternstore, patternIdToIndex);
@@ -1081,19 +1548,31 @@ QByteArray SqliteToXml::convert(const QString& dbPath)
 	// Pattern tracks (first one gets the patternstore)
 	exportPatternTracks(db, doc, songTc, patternstore, patternIdToIndex);
 
-	// Automation tracks (in song trackcontainer)
-	exportAutomationTracks(db, doc, songTc);
+	// Automation tracks (trackcontainer level only)
+	exportAutomationTracks(db, doc, songTc, "song_tc");
 
-	// Sample tracks (in song trackcontainer)
+	// Sample tracks
 	exportSampleTracks(db, doc, songTc);
 
+	// Song-level instrument tracks
+	exportSongInstrumentTracks(db, doc, songTc);
+
 	song.appendChild(songTc);
+
+	// Song-level automation tracks (outside trackcontainer)
+	exportAutomationTracks(db, doc, song, "song");
 
 	// Mixer
 	exportMixer(db, doc, song);
 
-	// Controllers
+	// Song UI elements (ControllerRackView, pianoroll, automationeditor, projectnotes, timeline)
+	exportSongUiElements(db, doc, song);
+
+	// Controllers (after UI elements to match original .mmp ordering)
 	exportControllers(db, doc, song);
+
+	// Scales and keymaps
+	exportScalesAndKeymaps(db, doc, song);
 
 	root.appendChild(song);
 

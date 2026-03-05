@@ -1,0 +1,39 @@
+TASK: Multiple tasks in progress
+STATUS: Active
+
+== COMPLETED THIS SESSION ==
+
+1. ZynAddSubFX no-sound fix (ROOT CAUSE FOUND AND FIXED):
+   - Bug: elemToJson() used QDomElement::text() which concatenates ALL descendant text
+   - This captured text from nested <string> elements onto parent elements
+   - jsonToXml() skipped "_text" key entirely instead of restoring as text content
+   - Fix in SqliteToXml.cpp: _text now creates a text node instead of being skipped
+   - Fix in XmlToSqlite.cpp: elemToJson now iterates direct text/CDATA children only
+   - Round-trip fidelity test: 0 tag differences, 0 attribute delta (562,598 attrs)
+   - Files: src/core/SqliteToXml.cpp, src/core/XmlToSqlite.cpp
+
+2. lmms-mcp reinstalled from project source (was broken, module import error)
+3. Python prototype tools (lmms_export.py, lmms_convert.py) backed up and removed
+4. Rubot learnings ingested: bash pitfalls, sqlite round-trip issues
+5. Skills created: auto-learn, lmms-debug
+6. Memory files created: MEMORY.md, bash-pitfalls.md
+
+== MIXER CHANNEL REMAPPING (in progress) ==
+STATUS: Export side done, import side not yet started
+
+Export changes in TrackOperationsWidget.cpp:
+- Added #include "Mixer.h"
+- exportSinglePattern now exports <mixerchannels> section with full channel configs
+
+Import TODO:
+- Parse <mixerchannels> from imported .xppt DOM
+- Check conflicts with Mixer::isChannelInUse(index)
+- If conflict: create new channel, copy settings, remap
+- If no conflict: use original channel number
+- Rewrite mixch attrs in DOM before loading tracks
+
+== STILL TODO ==
+- Duplicate instrument track name handling (same as pattern-tracks)
+- Verify no data loss in plugin settings storage
+- Rebuild existing .lmms-db files with fixed code to eliminate stale _text
+- User needs to test ZynAddSubFX fix before documenting

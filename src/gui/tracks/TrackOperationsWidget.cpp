@@ -63,6 +63,7 @@
 #include "Instrument.h"
 #include "InstrumentTrack.h"
 #include "InstrumentTrackView.h"
+#include "Mixer.h"
 #include "PatternStore.h"
 #include "PatternTrack.h"
 #include "PatternTrackView.h"
@@ -717,6 +718,9 @@ void TrackOperationsWidget::exportPattern()
 		QDomDocument& doc = dataFile;
 		QDomElement& content = dataFile.content();
 
+		// Collect unique mixer channel indices referenced by instrument tracks
+		QSet<int> referencedMixerChannels;
+
 		for (const auto& track : Engine::patternStore()->tracks())
 		{
 			QDomElement trackElement = doc.createElement("track");
@@ -731,6 +735,16 @@ void TrackOperationsWidget::exportPattern()
 			trackElement.appendChild(settingsElement);
 			track->saveTrackSpecificSettings(doc, settingsElement, false);
 
+			// Track which mixer channels are used
+			if (track->type() == Track::Type::Instrument)
+			{
+				auto* instTrack = dynamic_cast<InstrumentTrack*>(track);
+				if (instTrack)
+				{
+					referencedMixerChannels.insert(instTrack->mixerChannelModel()->value());
+				}
+			}
+
 			Clip* clip = track->getClip(static_cast<std::size_t>(patternIndex));
 			if (clip)
 			{
@@ -739,6 +753,35 @@ void TrackOperationsWidget::exportPattern()
 
 			content.appendChild(trackElement);
 		}
+
+		// Export mixer channel configurations for all referenced channels
+		auto* mixer = Engine::mixer();
+		QDomElement mixerChannelsElem = doc.createElement("mixerchannels");
+		for (int chIdx : referencedMixerChannels)
+		{
+			if (chIdx <= 0 || chIdx >= mixer->numChannels()) { continue; }
+			MixerChannel* ch = mixer->mixerChannel(chIdx);
+			QDomElement chElem = doc.createElement("mixerchannel");
+			chElem.setAttribute("num", chIdx);
+			chElem.setAttribute("name", ch->m_name);
+			if (const auto& color = ch->color()) { chElem.setAttribute("color", color->name()); }
+			ch->m_volumeModel.saveSettings(doc, chElem, "volume");
+			ch->m_muteModel.saveSettings(doc, chElem, "muted");
+			ch->m_soloModel.saveSettings(doc, chElem, "soloed");
+			ch->m_fxChain.saveState(doc, chElem);
+
+			// Save sends from this channel
+			for (const auto& send : ch->m_sends)
+			{
+				QDomElement sendElem = doc.createElement("send");
+				sendElem.setAttribute("channel", send->receiverIndex());
+				send->amount()->saveSettings(doc, sendElem, "amount");
+				chElem.appendChild(sendElem);
+			}
+
+			mixerChannelsElem.appendChild(chElem);
+		}
+		content.appendChild(mixerChannelsElem);
 
 		dataFile.writeFile(filePath);
 	};

@@ -145,7 +145,6 @@ private:
 };
 
 // Convert a QDomElement and all its children to a JSON object
-// This is the C++ equivalent of elem_to_json() in lmms_convert.py
 QJsonObject elemToJson(const QDomElement& elem)
 {
 	QJsonObject obj;
@@ -158,12 +157,26 @@ QJsonObject elemToJson(const QDomElement& elem)
 		obj.insert(attr.name(), QJsonValue(attr.value()));
 	}
 
+	// Runtime-only elements that LMMS generates at load time (never persisted in .mmp)
+	static const QSet<QString> runtimeOnlyTags = {"journallingObject"};
+
 	// Child elements become nested objects or arrays
+	// Track every child element occurrence to preserve interleaved ordering
+	QJsonArray orderArr;
+
 	auto child = elem.firstChildElement();
 	while (!child.isNull())
 	{
 		QString tag = child.tagName();
+		if (runtimeOnlyTags.contains(tag))
+		{
+			child = child.nextSiblingElement();
+			continue;
+		}
 		QJsonObject childObj = elemToJson(child);
+
+		// Record every child element in sequence for faithful reconstruction
+		orderArr.append(tag);
 
 		if (obj.contains(tag))
 		{
@@ -191,6 +204,30 @@ QJsonObject elemToJson(const QDomElement& elem)
 		child = child.nextSiblingElement();
 	}
 
+	// Store element order for faithful XML reconstruction
+	if (!orderArr.isEmpty())
+	{
+		obj.insert("_order", orderArr);
+	}
+
+	// Capture direct text/CDATA content (not descendant text)
+	// QDomElement::text() concatenates ALL descendant text which is wrong here
+	QString textContent;
+	QDomNode textNode = elem.firstChild();
+	while (!textNode.isNull())
+	{
+		if (textNode.isText() || textNode.isCDATASection())
+		{
+			textContent += textNode.toText().data();
+		}
+		textNode = textNode.nextSibling();
+	}
+	textContent = textContent.trimmed();
+	if (!textContent.isEmpty())
+	{
+		obj.insert("_text", textContent);
+	}
+
 	return obj;
 }
 
@@ -199,6 +236,13 @@ QString jsonToString(const QJsonObject& obj)
 {
 	if (obj.isEmpty()) { return "{}"; }
 	return QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+}
+
+// Serialize a QJsonArray to a compact JSON string
+QString jsonArrayToString(const QJsonArray& arr)
+{
+	if (arr.isEmpty()) { return "[]"; }
+	return QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact));
 }
 
 // Capture all attributes NOT in knownKeys as a QJsonObject
@@ -296,6 +340,9 @@ void insertEffectsFromChain(SqliteDb& db, const QDomElement& fxchain,
 {
 	static const QSet<QString> knownAttrs = {"name", "on", "wet", "gate"};
 
+	// Capture fxchain-level enabled attribute
+	int fxchainEnabled = fxchain.attribute("enabled", "1").toInt();
+
 	int fxIdx = 0;
 	auto fxElem = fxchain.firstChildElement("effect");
 	while (!fxElem.isNull())
@@ -322,8 +369,8 @@ void insertEffectsFromChain(SqliteDb& db, const QDomElement& fxchain,
 		}
 
 		Stmt fxStmt(db.get(),
-			"INSERT INTO effect (owner_type, owner_id, plugin_name, sort_order, enabled, wet, gate, params_json) "
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+			"INSERT INTO effect (owner_type, owner_id, plugin_name, sort_order, enabled, wet, gate, fxchain_enabled, params_json) "
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
 		if (fxStmt.valid())
 		{
 			fxStmt.bindText(1, ownerType);
@@ -333,11 +380,34 @@ void insertEffectsFromChain(SqliteDb& db, const QDomElement& fxchain,
 			fxStmt.bindInt(5, enabled);
 			fxStmt.bindDouble(6, wet);
 			fxStmt.bindDouble(7, gate);
-			fxStmt.bindText(8, jsonToString(params));
+			fxStmt.bindInt(8, fxchainEnabled);
+			fxStmt.bindText(9, jsonToString(params));
 			fxStmt.exec();
 		}
 		fxIdx++;
 		fxElem = fxElem.nextSiblingElement("effect");
+	}
+
+	// If fxchain has no effects but has attributes, store a placeholder row
+	// so we don't lose the fxchain enabled state
+	if (fxIdx == 0 && fxchain.hasAttributes())
+	{
+		Stmt fxStmt(db.get(),
+			"INSERT INTO effect (owner_type, owner_id, plugin_name, sort_order, enabled, wet, gate, fxchain_enabled, params_json) "
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+		if (fxStmt.valid())
+		{
+			fxStmt.bindText(1, ownerType);
+			fxStmt.bindInt64(2, ownerId);
+			fxStmt.bindText(3, "_fxchain_metadata");  // sentinel: not a real effect
+			fxStmt.bindInt(4, 0);
+			fxStmt.bindInt(5, 0);
+			fxStmt.bindDouble(6, 0);
+			fxStmt.bindDouble(7, 0);
+			fxStmt.bindInt(8, fxchainEnabled);
+			fxStmt.bindText(9, "{}");
+			fxStmt.exec();
+		}
 	}
 }
 
@@ -457,41 +527,43 @@ InstrumentTrackData extractInstrumentTrackData(const QDomElement& trackElem)
 	return data;
 }
 
-sqlite3_int64 insertInstrumentTrack(SqliteDb& db, const InstrumentTrackData& data, int sortOrder)
+sqlite3_int64 insertInstrumentTrack(SqliteDb& db, const InstrumentTrackData& data,
+	int sortOrder, const char* containerType = "patternstore")
 {
 	Stmt stmt(db.get(),
 		"INSERT INTO instrument_track "
-		"(name, volume, panning, pitch, pitch_range, mixer_channel_id, base_note, "
+		"(container_type, name, volume, panning, pitch, pitch_range, mixer_channel_id, base_note, "
 		"use_master_pitch, muted, solo, color, sort_order, "
 		"instrument_plugin, instrument_params_json, sound_shaping_json, "
 		"arpeggio_json, chord_creator_json, midi_port_json, microtuner_json, "
 		"track_extra_json, instrumenttrack_extra_json) "
-		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 	if (!stmt.valid()) { return -1; }
 
-	stmt.bindText(1, data.name);
-	stmt.bindDouble(2, data.volume);
-	stmt.bindDouble(3, data.panning);
-	stmt.bindDouble(4, data.pitch);
-	stmt.bindInt(5, data.pitchRange);
-	if (data.mixerChannelId >= 0) { stmt.bindInt(6, data.mixerChannelId); }
-	else { stmt.bindNull(6); }
-	stmt.bindInt(7, data.baseNote);
-	stmt.bindInt(8, data.useMasterPitch);
-	stmt.bindInt(9, data.muted);
-	stmt.bindInt(10, data.solo);
-	if (!data.color.isEmpty()) { stmt.bindText(11, data.color); }
-	else { stmt.bindNull(11); }
-	stmt.bindInt(12, sortOrder);
-	stmt.bindText(13, data.instrumentPlugin);
-	stmt.bindText(14, data.instrumentParamsJson);
-	stmt.bindText(15, data.soundShapingJson);
-	stmt.bindText(16, data.arpJson);
-	stmt.bindText(17, data.chordJson);
-	stmt.bindText(18, data.midiJson);
-	stmt.bindText(19, data.microtunerJson);
-	stmt.bindText(20, data.trackExtraJson);
-	stmt.bindText(21, data.instrumenttrackExtraJson);
+	stmt.bindText(1, containerType);
+	stmt.bindText(2, data.name);
+	stmt.bindDouble(3, data.volume);
+	stmt.bindDouble(4, data.panning);
+	stmt.bindDouble(5, data.pitch);
+	stmt.bindInt(6, data.pitchRange);
+	if (data.mixerChannelId >= 0) { stmt.bindInt(7, data.mixerChannelId); }
+	else { stmt.bindNull(7); }
+	stmt.bindInt(8, data.baseNote);
+	stmt.bindInt(9, data.useMasterPitch);
+	stmt.bindInt(10, data.muted);
+	stmt.bindInt(11, data.solo);
+	if (!data.color.isEmpty()) { stmt.bindText(12, data.color); }
+	else { stmt.bindNull(12); }
+	stmt.bindInt(13, sortOrder);
+	stmt.bindText(14, data.instrumentPlugin);
+	stmt.bindText(15, data.instrumentParamsJson);
+	stmt.bindText(16, data.soundShapingJson);
+	stmt.bindText(17, data.arpJson);
+	stmt.bindText(18, data.chordJson);
+	stmt.bindText(19, data.midiJson);
+	stmt.bindText(20, data.microtunerJson);
+	stmt.bindText(21, data.trackExtraJson);
+	stmt.bindText(22, data.instrumenttrackExtraJson);
 	stmt.exec();
 
 	return db.lastInsertId();
@@ -586,6 +658,12 @@ void convertProjectMetadata(SqliteDb& db, const QDomElement& root)
 	double masterVol = 100, masterPitch = 0;
 	QString extraJson = "{}";
 
+	// Root element attributes
+	QString lmmsVersion = root.attribute("version", "30");
+	QString projectType = root.attribute("type", "song");
+	QString creator = root.attribute("creator", "LMMS");
+	QString creatorVersion = root.attribute("creatorversion", "1.3.0-alpha");
+
 	if (!head.isNull())
 	{
 		bpm = head.attribute("bpm", "140").toDouble();
@@ -599,47 +677,178 @@ void convertProjectMetadata(SqliteDb& db, const QDomElement& root)
 	}
 
 	Stmt stmt(db.get(),
-		"INSERT INTO project (id, name, bpm, timesig_numerator, timesig_denominator, master_volume, master_pitch, extra_json) "
-		"VALUES (1, ?, ?, ?, ?, ?, ?, ?)");
+		"INSERT INTO project (id, name, bpm, timesig_numerator, timesig_denominator, "
+		"master_volume, master_pitch, lmms_version, project_type, creator, creator_version, extra_json) "
+		"VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 	if (stmt.valid())
 	{
-		stmt.bindText(1, ""); // project name: empty in C++ path
+		stmt.bindText(1, "");
 		stmt.bindDouble(2, bpm);
 		stmt.bindInt(3, tsNum);
 		stmt.bindInt(4, tsDen);
 		stmt.bindDouble(5, masterVol);
 		stmt.bindDouble(6, masterPitch);
-		stmt.bindText(7, extraJson);
+		stmt.bindText(7, lmmsVersion);
+		stmt.bindText(8, projectType);
+		stmt.bindText(9, creator);
+		stmt.bindText(10, creatorVersion);
+		stmt.bindText(11, extraJson);
 		stmt.exec();
 	}
-	logMsg("Project: bpm=%g, time_sig=%d/%d", bpm, tsNum, tsDen);
+	logMsg("Project: bpm=%g, time_sig=%d/%d, version=%s", bpm, tsNum, tsDen,
+		lmmsVersion.toUtf8().constData());
+}
+
+// Store song-level UI elements (pianoroll, automationeditor, projectnotes, timeline, etc.)
+void convertSongUiElements(SqliteDb& db, const QDomElement& songElem)
+{
+	// All child elements of <song> that are NOT trackcontainer, mixer, or controllers
+	static const QSet<QString> knownSongChildren = {
+		"trackcontainer", "mixer", "fxmixer", "controllers", "scales", "keymaps", "track"
+	};
+
+	auto child = songElem.firstChildElement();
+	while (!child.isNull())
+	{
+		if (!knownSongChildren.contains(child.tagName()))
+		{
+			QString elemName = child.tagName();
+			QJsonObject attrsObj = elemToJson(child);
+
+			// Separate text content from attributes for elements like projectnotes
+			QString contentText;
+			QString rawText = child.text().trimmed();
+			if (!rawText.isEmpty())
+			{
+				contentText = rawText;
+				// Remove _text from attrsObj since we store it separately
+				attrsObj.remove("_text");
+			}
+
+			// Separate attributes from child elements
+			QJsonObject pureAttrs;
+			QJsonObject childrenObj;
+			for (auto it = attrsObj.begin(); it != attrsObj.end(); ++it)
+			{
+				if (it.value().isObject() || it.value().isArray())
+				{
+					childrenObj.insert(it.key(), it.value());
+				}
+				else
+				{
+					pureAttrs.insert(it.key(), it.value());
+				}
+			}
+
+			Stmt stmt(db.get(),
+				"INSERT INTO song_ui_element (element_name, attributes_json, children_json, content_text) "
+				"VALUES (?, ?, ?, ?)");
+			if (stmt.valid())
+			{
+				stmt.bindText(1, elemName);
+				stmt.bindText(2, jsonToString(pureAttrs));
+				stmt.bindText(3, jsonToString(childrenObj));
+				if (!contentText.isEmpty()) { stmt.bindText(4, contentText); }
+				else { stmt.bindNull(4); }
+				stmt.exec();
+			}
+		}
+		child = child.nextSiblingElement();
+	}
+}
+
+// Store trackcontainer window state
+void convertTrackcontainerState(SqliteDb& db, const QDomElement& tcElem, const QString& containerType)
+{
+	static const QSet<QString> knownTcAttrs = {"type", "visible", "minimized", "maximized", "x", "y", "width", "height"};
+
+	int visible = tcElem.attribute("visible", "1").toInt();
+	int minimized = tcElem.attribute("minimized", "0").toInt();
+	int maximized = tcElem.attribute("maximized", "0").toInt();
+	int x = tcElem.attribute("x", "0").toInt();
+	int y = tcElem.attribute("y", "0").toInt();
+	int width = tcElem.attribute("width", "1600").toInt();
+	int height = tcElem.attribute("height", "900").toInt();
+	QJsonObject extras = extraAttrs(tcElem, knownTcAttrs);
+
+	Stmt stmt(db.get(),
+		"INSERT INTO trackcontainer_state (container_type, visible, minimized, maximized, x, y, width, height, extra_json) "
+		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+	if (stmt.valid())
+	{
+		stmt.bindText(1, containerType);
+		stmt.bindInt(2, visible);
+		stmt.bindInt(3, minimized);
+		stmt.bindInt(4, maximized);
+		stmt.bindInt(5, x);
+		stmt.bindInt(6, y);
+		stmt.bindInt(7, width);
+		stmt.bindInt(8, height);
+		stmt.bindText(9, jsonToString(extras));
+		stmt.exec();
+	}
 }
 
 void convertMixer(SqliteDb& db, const QDomElement& root)
 {
-	// Find mixer channels — try current then legacy tag names
-	QList<QDomElement> channels;
+	// Find mixer element
 	auto mixer = root.firstChildElement("song").firstChildElement("mixer");
 	if (mixer.isNull())
 	{
-		// Try as child of root (when root is the document element)
 		auto songElem = root.firstChildElement("song");
-		if (!songElem.isNull()) { mixer = songElem.firstChildElement("mixer"); }
+		if (!songElem.isNull())
+		{
+			mixer = songElem.firstChildElement("mixer");
+			if (mixer.isNull()) { mixer = songElem.firstChildElement("fxmixer"); }
+		}
 	}
 
-	if (!mixer.isNull())
+	if (mixer.isNull())
 	{
-		auto ch = mixer.firstChildElement("mixerchannel");
-		if (ch.isNull()) { ch = mixer.firstChildElement("fxchannel"); }
-		while (!ch.isNull())
+		logMsg("No mixer found");
+		return;
+	}
+
+	// Store mixer window state
+	{
+		static const QSet<QString> knownMixerAttrs = {"visible", "minimized", "maximized", "x", "y", "width", "height"};
+		int visible = mixer.attribute("visible", "0").toInt();
+		int minimized = mixer.attribute("minimized", "0").toInt();
+		int maximized = mixer.attribute("maximized", "0").toInt();
+		int x = mixer.attribute("x", "0").toInt();
+		int y = mixer.attribute("y", "0").toInt();
+		int width = mixer.attribute("width", "865").toInt();
+		int height = mixer.attribute("height", "278").toInt();
+		QJsonObject extras = extraAttrs(mixer, knownMixerAttrs);
+
+		Stmt stmt(db.get(),
+			"INSERT INTO mixer_state (id, visible, minimized, maximized, x, y, width, height, extra_json) "
+			"VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)");
+		if (stmt.valid())
 		{
-			channels.append(ch);
+			stmt.bindInt(1, visible);
+			stmt.bindInt(2, minimized);
+			stmt.bindInt(3, maximized);
+			stmt.bindInt(4, x);
+			stmt.bindInt(5, y);
+			stmt.bindInt(6, width);
+			stmt.bindInt(7, height);
+			stmt.bindText(8, jsonToString(extras));
+			stmt.exec();
+		}
+	}
+
+	// Find mixer channels
+	QList<QDomElement> channels;
+	auto ch = mixer.firstChildElement("mixerchannel");
+	if (ch.isNull()) { ch = mixer.firstChildElement("fxchannel"); }
+	while (!ch.isNull())
+	{
+		channels.append(ch);
+		ch = ch.nextSiblingElement();
+		while (!ch.isNull() && ch.tagName() != "mixerchannel" && ch.tagName() != "fxchannel")
+		{
 			ch = ch.nextSiblingElement();
-			// Skip non-channel elements
-			while (!ch.isNull() && ch.tagName() != "mixerchannel" && ch.tagName() != "fxchannel")
-			{
-				ch = ch.nextSiblingElement();
-			}
 		}
 	}
 
@@ -649,7 +858,8 @@ void convertMixer(SqliteDb& db, const QDomElement& root)
 		return;
 	}
 
-	static const QSet<QString> knownChAttrs = {"num", "name", "volume", "muted", "soloed"};
+	// Known mixer channel attributes — including color now
+	static const QSet<QString> knownChAttrs = {"num", "name", "volume", "muted", "soloed", "color"};
 
 	struct DeferredRoute { int from; int to; double amount; };
 	QList<DeferredRoute> deferredRoutes;
@@ -662,10 +872,11 @@ void convertMixer(SqliteDb& db, const QDomElement& root)
 		double chVol = chElem.attribute("volume", "1.0").toDouble();
 		int chMuted = chElem.attribute("muted", "0").toInt();
 		int chSoloed = chElem.attribute("soloed", "0").toInt();
+		QString chColor = chElem.attribute("color", "");
 
-		// Capture extra attributes and unknown children
+		// Capture extra attributes and unknown children (NOT send, fxchain, or connection)
 		QJsonObject chExtras = extraAttrs(chElem, knownChAttrs);
-		static const QSet<QString> knownChChildren = {"send", "fxchain"};
+		static const QSet<QString> knownChChildren = {"send", "fxchain", "connection"};
 		QJsonObject chChildExtras = extraChildren(chElem, knownChChildren);
 		if (!chChildExtras.isEmpty())
 		{
@@ -673,8 +884,8 @@ void convertMixer(SqliteDb& db, const QDomElement& root)
 		}
 
 		Stmt stmt(db.get(),
-			"INSERT INTO mixer_channel (id, name, volume, muted, soloed, sort_order, extra_json) "
-			"VALUES (?, ?, ?, ?, ?, ?, ?)");
+			"INSERT INTO mixer_channel (id, name, volume, muted, soloed, color, sort_order, extra_json) "
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
 		if (stmt.valid())
 		{
 			stmt.bindInt(1, chNum);
@@ -682,8 +893,10 @@ void convertMixer(SqliteDb& db, const QDomElement& root)
 			stmt.bindDouble(3, chVol);
 			stmt.bindInt(4, chMuted);
 			stmt.bindInt(5, chSoloed);
-			stmt.bindInt(6, chNum);
-			stmt.bindText(7, jsonToString(chExtras));
+			if (!chColor.isEmpty()) { stmt.bindText(6, chColor); }
+			else { stmt.bindNull(6); }
+			stmt.bindInt(7, chNum);
+			stmt.bindText(8, jsonToString(chExtras));
 			stmt.exec();
 		}
 
@@ -702,6 +915,41 @@ void convertMixer(SqliteDb& db, const QDomElement& root)
 		if (!fxchain.isNull())
 		{
 			insertEffectsFromChain(db, fxchain, "mixer_channel", chNum);
+			effectCount++;
+		}
+
+		// Controller connections on mixer channel parameters
+		auto connElem = chElem.firstChildElement("connection");
+		while (!connElem.isNull())
+		{
+			// Each <connection> contains a child element named after the parameter (e.g. <muted>)
+			// and that child may contain a controller connection element
+			auto paramChild = connElem.firstChildElement();
+			while (!paramChild.isNull())
+			{
+				QString paramName = paramChild.tagName();
+				// Look for controller connection inside
+				auto ctrlConn = paramChild.firstChildElement();
+				while (!ctrlConn.isNull())
+				{
+					QJsonObject connJson = elemToJson(ctrlConn);
+					Stmt ccStmt(db.get(),
+						"INSERT INTO controller_connection (owner_type, owner_id, param_name, controller_id, connection_json) "
+						"VALUES (?, ?, ?, ?, ?)");
+					if (ccStmt.valid())
+					{
+						ccStmt.bindText(1, "mixer_channel");
+						ccStmt.bindInt(2, chNum);
+						ccStmt.bindText(3, paramName);
+						ccStmt.bindNull(4); // inline controller, not in controller table
+						ccStmt.bindText(5, jsonToString(connJson));
+						ccStmt.exec();
+					}
+					ctrlConn = ctrlConn.nextSiblingElement();
+				}
+				paramChild = paramChild.nextSiblingElement();
+			}
+			connElem = connElem.nextSiblingElement("connection");
 		}
 	}
 
@@ -719,13 +967,16 @@ void convertMixer(SqliteDb& db, const QDomElement& root)
 		}
 	}
 
-	logMsg("Mixer: %d channels, %d routes, %d effects",
+	logMsg("Mixer: %d channels, %d routes, %d effect chains",
 		channels.size(), deferredRoutes.size(), effectCount);
 }
 
 void convertPatternstore(SqliteDb& db, const QDomElement& pstoreElem,
 	QMap<int, sqlite3_int64>& patternIdMap)
 {
+	// Store patternstore trackcontainer state
+	convertTrackcontainerState(db, pstoreElem, "patternstore");
+
 	// First pass: discover all pattern indices
 	QSet<int> allPatternIndices;
 	auto trackElem = pstoreElem.firstChildElement("track");
@@ -842,6 +1093,93 @@ void convertPatternstore(SqliteDb& db, const QDomElement& pstoreElem,
 		itCount, mcCount, noteCount);
 }
 
+// Convert song-level instrument tracks (type=0 in song trackcontainer)
+void convertSongInstrumentTracks(SqliteDb& db, const QDomElement& songTc)
+{
+	static const QSet<QString> knownMcAttrs = {"pos", "type", "steps", "muted", "mute", "name", "color", "len"};
+
+	int itCount = 0, mcCount = 0, noteCount = 0;
+	auto trackElem = songTc.firstChildElement("track");
+	while (!trackElem.isNull())
+	{
+		if (trackElem.attribute("type") != "0")
+		{
+			trackElem = trackElem.nextSiblingElement("track");
+			continue;
+		}
+
+		auto data = extractInstrumentTrackData(trackElem);
+		if (!data.valid)
+		{
+			trackElem = trackElem.nextSiblingElement("track");
+			continue;
+		}
+
+		sqlite3_int64 itId = insertInstrumentTrack(db, data, itCount, "song");
+
+		// Effects on the instrumenttrack element
+		auto itElem = trackElem.firstChildElement("instrumenttrack");
+		if (!itElem.isNull())
+		{
+			auto fxchain = itElem.firstChildElement("fxchain");
+			if (!fxchain.isNull())
+			{
+				insertEffectsFromChain(db, fxchain, "instrument_track", itId);
+			}
+		}
+
+		itCount++;
+
+		// Convert midiclips (positioned on song timeline, no pattern_id)
+		auto clips = findClipElements(trackElem, "midiclip");
+		for (const auto& clipElem : clips)
+		{
+			int clipPos = clipElem.attribute("pos", "0").toInt();
+			int clipLen = clipElem.attribute("len", "0").toInt();
+			int clipType = clipElem.attribute("type", "1").toInt();
+			int steps = clipElem.attribute("steps", "32").toInt();
+			int muted = clipElem.attribute("muted",
+				clipElem.attribute("mute", "0")).toInt();
+			QString clipName = clipElem.attribute("name", "");
+			QString clipColor = clipElem.attribute("color", "");
+			QJsonObject mcExtras = extraAttrs(clipElem, knownMcAttrs);
+
+			Stmt stmt(db.get(),
+				"INSERT INTO midi_clip "
+				"(instrument_track_id, position, length, clip_type, steps, muted, name, color, extra_json) "
+				"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+			if (stmt.valid())
+			{
+				stmt.bindInt64(1, itId);
+				stmt.bindInt(2, clipPos);
+				stmt.bindInt(3, clipLen);
+				stmt.bindInt(4, clipType);
+				stmt.bindInt(5, steps);
+				stmt.bindInt(6, muted);
+				stmt.bindText(7, clipName);
+				if (!clipColor.isEmpty()) { stmt.bindText(8, clipColor); }
+				else { stmt.bindNull(8); }
+				stmt.bindText(9, jsonToString(mcExtras));
+				stmt.exec();
+			}
+			sqlite3_int64 mcId = db.lastInsertId();
+			if (mcId > 0)
+			{
+				mcCount++;
+				noteCount += convertNotes(db, clipElem, mcId);
+			}
+		}
+
+		trackElem = trackElem.nextSiblingElement("track");
+	}
+
+	if (itCount > 0)
+	{
+		logMsg("Song instrument tracks: %d tracks, %d clips, %d notes",
+			itCount, mcCount, noteCount);
+	}
+}
+
 void convertPatternTracks(SqliteDb& db, const QDomElement& songTc,
 	QMap<int, sqlite3_int64>& patternIdMap)
 {
@@ -939,7 +1277,8 @@ void convertPatternTracks(SqliteDb& db, const QDomElement& songTc,
 	logMsg("Pattern tracks: %d tracks, %d clips", ptCount, pcCount);
 }
 
-void convertAutomationTracks(SqliteDb& db, const QDomElement& parentElem)
+void convertAutomationTracks(SqliteDb& db, const QDomElement& parentElem,
+	const QString& containerType = "song_tc")
 {
 	static const QSet<QString> knownTrackAttrs = {"type", "name", "muted", "solo", "color"};
 	static const QSet<QString> knownAcAttrs = {"pos", "len", "prog", "tens", "mute", "muted", "name", "color"};
@@ -962,8 +1301,11 @@ void convertAutomationTracks(SqliteDb& db, const QDomElement& parentElem)
 		QString color = trackElem.attribute("color", "");
 		QJsonObject trackExtras = extraAttrs(trackElem, knownTrackAttrs);
 
+		int trackTypeInt = trackElem.attribute("type", "5").toInt();
+
 		Stmt stmt(db.get(),
-			"INSERT INTO automation_track (name, muted, solo, color, sort_order, extra_json) VALUES (?, ?, ?, ?, ?, ?)");
+			"INSERT INTO automation_track (name, muted, solo, color, sort_order, track_type, container_type, extra_json)"
+			" VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
 		if (stmt.valid())
 		{
 			stmt.bindText(1, name);
@@ -972,7 +1314,9 @@ void convertAutomationTracks(SqliteDb& db, const QDomElement& parentElem)
 			if (!color.isEmpty()) { stmt.bindText(4, color); }
 			else { stmt.bindNull(4); }
 			stmt.bindInt(5, atCount);
-			stmt.bindText(6, jsonToString(trackExtras));
+			stmt.bindInt(6, trackTypeInt);
+			stmt.bindText(7, containerType);
+			stmt.bindText(8, jsonToString(trackExtras));
 			stmt.exec();
 		}
 		sqlite3_int64 atId = db.lastInsertId();
@@ -1234,6 +1578,83 @@ void convertControllers(SqliteDb& db, const QDomElement& root)
 	}
 }
 
+// Store scales and keymaps
+void convertScalesAndKeymaps(SqliteDb& db, const QDomElement& songElem)
+{
+	// Scales
+	auto scalesElem = songElem.firstChildElement("scales");
+	if (!scalesElem.isNull())
+	{
+		int idx = 0;
+		auto scaleElem = scalesElem.firstChildElement("scale");
+		while (!scaleElem.isNull())
+		{
+			QString desc = scaleElem.attribute("description", "");
+			QJsonArray intervals;
+			auto interval = scaleElem.firstChildElement("interval");
+			while (!interval.isNull())
+			{
+				QJsonObject intObj;
+				intObj.insert("num", interval.attribute("num", "1"));
+				intObj.insert("den", interval.attribute("den", "1"));
+				intervals.append(intObj);
+				interval = interval.nextSiblingElement("interval");
+			}
+
+			Stmt stmt(db.get(),
+				"INSERT INTO scale (description, intervals_json, sort_order) VALUES (?, ?, ?)");
+			if (stmt.valid())
+			{
+				stmt.bindText(1, desc);
+				stmt.bindText(2, jsonArrayToString(intervals));
+				stmt.bindInt(3, idx);
+				stmt.exec();
+			}
+			idx++;
+			scaleElem = scaleElem.nextSiblingElement("scale");
+		}
+		if (idx > 0) { logMsg("Scales: %d", idx); }
+	}
+
+	// Keymaps
+	auto keymapsElem = songElem.firstChildElement("keymaps");
+	if (!keymapsElem.isNull())
+	{
+		static const QSet<QString> knownKmAttrs = {"description", "base_key", "base_freq", "first_key", "last_key", "middle_key"};
+		int idx = 0;
+		auto kmElem = keymapsElem.firstChildElement("keymap");
+		while (!kmElem.isNull())
+		{
+			QString desc = kmElem.attribute("description", "");
+			int baseKey = kmElem.attribute("base_key", "69").toInt();
+			double baseFreq = kmElem.attribute("base_freq", "440.0").toDouble();
+			int firstKey = kmElem.attribute("first_key", "0").toInt();
+			int lastKey = kmElem.attribute("last_key", "127").toInt();
+			int middleKey = kmElem.attribute("middle_key", "60").toInt();
+			QJsonObject extras = extraAttrs(kmElem, knownKmAttrs);
+
+			Stmt stmt(db.get(),
+				"INSERT INTO keymap (description, base_key, base_freq, first_key, last_key, middle_key, sort_order, extra_json) "
+				"VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+			if (stmt.valid())
+			{
+				stmt.bindText(1, desc);
+				stmt.bindInt(2, baseKey);
+				stmt.bindDouble(3, baseFreq);
+				stmt.bindInt(4, firstKey);
+				stmt.bindInt(5, lastKey);
+				stmt.bindInt(6, middleKey);
+				stmt.bindInt(7, idx);
+				stmt.bindText(8, jsonToString(extras));
+				stmt.exec();
+			}
+			idx++;
+			kmElem = kmElem.nextSiblingElement("keymap");
+		}
+		if (idx > 0) { logMsg("Keymaps: %d", idx); }
+	}
+}
+
 // Create all tables from embedded schema
 bool createSchema(SqliteDb& db)
 {
@@ -1246,8 +1667,42 @@ CREATE TABLE IF NOT EXISTS project (
     timesig_denominator INTEGER NOT NULL DEFAULT 4,
     master_volume REAL NOT NULL DEFAULT 100,
     master_pitch REAL NOT NULL DEFAULT 0,
+    lmms_version TEXT NOT NULL DEFAULT '30',
+    project_type TEXT NOT NULL DEFAULT 'song',
+    creator TEXT NOT NULL DEFAULT 'LMMS',
+    creator_version TEXT NOT NULL DEFAULT '1.3.0-alpha',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     modified_at TEXT NOT NULL DEFAULT (datetime('now')),
+    extra_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS song_ui_element (
+    id INTEGER PRIMARY KEY,
+    element_name TEXT NOT NULL,
+    attributes_json TEXT NOT NULL DEFAULT '{}',
+    children_json TEXT NOT NULL DEFAULT '{}',
+    content_text TEXT
+);
+CREATE TABLE IF NOT EXISTS trackcontainer_state (
+    id INTEGER PRIMARY KEY,
+    container_type TEXT NOT NULL UNIQUE,
+    visible INTEGER NOT NULL DEFAULT 1,
+    minimized INTEGER NOT NULL DEFAULT 0,
+    maximized INTEGER NOT NULL DEFAULT 0,
+    x INTEGER NOT NULL DEFAULT 0,
+    y INTEGER NOT NULL DEFAULT 0,
+    width INTEGER NOT NULL DEFAULT 1600,
+    height INTEGER NOT NULL DEFAULT 900,
+    extra_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS mixer_state (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    visible INTEGER NOT NULL DEFAULT 0,
+    minimized INTEGER NOT NULL DEFAULT 0,
+    maximized INTEGER NOT NULL DEFAULT 0,
+    x INTEGER NOT NULL DEFAULT 0,
+    y INTEGER NOT NULL DEFAULT 0,
+    width INTEGER NOT NULL DEFAULT 865,
+    height INTEGER NOT NULL DEFAULT 278,
     extra_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS mixer_channel (
@@ -1275,10 +1730,12 @@ CREATE TABLE IF NOT EXISTS effect (
     enabled INTEGER NOT NULL DEFAULT 1,
     wet REAL NOT NULL DEFAULT 1.0,
     gate REAL NOT NULL DEFAULT 0.0,
+    fxchain_enabled INTEGER NOT NULL DEFAULT 1,
     params_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS instrument_track (
     id INTEGER PRIMARY KEY,
+    container_type TEXT NOT NULL DEFAULT 'patternstore',
     name TEXT NOT NULL,
     volume REAL NOT NULL DEFAULT 100,
     panning REAL NOT NULL DEFAULT 0,
@@ -1330,14 +1787,15 @@ CREATE TABLE IF NOT EXISTS pattern (
 CREATE TABLE IF NOT EXISTS midi_clip (
     id INTEGER PRIMARY KEY,
     instrument_track_id INTEGER NOT NULL REFERENCES instrument_track(id),
-    pattern_id INTEGER NOT NULL REFERENCES pattern(id),
+    pattern_id INTEGER REFERENCES pattern(id),
+    position INTEGER NOT NULL DEFAULT 0,
+    length INTEGER NOT NULL DEFAULT 0,
     clip_type INTEGER NOT NULL DEFAULT 1,
     steps INTEGER NOT NULL DEFAULT 32,
     muted INTEGER NOT NULL DEFAULT 0,
     name TEXT,
     color TEXT,
-    extra_json TEXT NOT NULL DEFAULT '{}',
-    UNIQUE(instrument_track_id, pattern_id)
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS note (
     id INTEGER PRIMARY KEY,
@@ -1390,6 +1848,8 @@ CREATE TABLE IF NOT EXISTS automation_track (
     solo INTEGER NOT NULL DEFAULT 0,
     color TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
+    track_type INTEGER NOT NULL DEFAULT 5,
+    container_type TEXT NOT NULL DEFAULT 'song_tc',
     extra_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS automation_clip (
@@ -1432,7 +1892,25 @@ CREATE TABLE IF NOT EXISTS controller_connection (
     owner_type TEXT NOT NULL,
     owner_id INTEGER NOT NULL,
     param_name TEXT NOT NULL,
-    controller_id INTEGER NOT NULL REFERENCES controller(id)
+    controller_id INTEGER REFERENCES controller(id),
+    connection_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS scale (
+    id INTEGER PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    intervals_json TEXT NOT NULL DEFAULT '[]',
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS keymap (
+    id INTEGER PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    base_key INTEGER NOT NULL DEFAULT 69,
+    base_freq REAL NOT NULL DEFAULT 440.0,
+    first_key INTEGER NOT NULL DEFAULT 0,
+    last_key INTEGER NOT NULL DEFAULT 127,
+    middle_key INTEGER NOT NULL DEFAULT 60,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 )SQL";
 
@@ -1468,19 +1946,24 @@ bool XmlToSqlite::convert(const QDomDocument& doc, const QString& dbPath)
 
 	QDomElement root = doc.documentElement();
 
-	// Project metadata
+	// Project metadata (includes root element attributes)
 	convertProjectMetadata(db, root);
 
-	// Mixer
+	// Mixer (including window state)
 	convertMixer(db, root);
 
 	// Find the patternstore
-	// It can be nested: song > trackcontainer > track[type=1] > patterntrack > trackcontainer[type=patternstore]
 	QDomElement patternstore;
 	auto songElem = root.firstChildElement("song");
 	if (!songElem.isNull())
 	{
+		// Store song trackcontainer state
 		auto songTc = songElem.firstChildElement("trackcontainer");
+		if (!songTc.isNull())
+		{
+			convertTrackcontainerState(db, songTc, "song");
+		}
+
 		// Search for patternstore inside pattern tracks
 		auto track = songTc.firstChildElement("track");
 		while (!track.isNull())
@@ -1501,6 +1984,12 @@ bool XmlToSqlite::convert(const QDomDocument& doc, const QString& dbPath)
 			}
 			track = track.nextSiblingElement("track");
 		}
+
+		// Song UI elements (pianoroll, automationeditor, projectnotes, timeline, etc.)
+		convertSongUiElements(db, songElem);
+
+		// Scales and keymaps
+		convertScalesAndKeymaps(db, songElem);
 	}
 
 	QMap<int, sqlite3_int64> patternIdMap;
@@ -1515,20 +2004,20 @@ bool XmlToSqlite::convert(const QDomDocument& doc, const QString& dbPath)
 		logMsg("WARNING: No patternstore found");
 	}
 
-	// Song trackcontainer for pattern/automation/sample tracks
+	// Song trackcontainer for pattern/automation/sample/instrument tracks
 	auto songTc = songElem.firstChildElement("trackcontainer");
 	if (!songTc.isNull())
 	{
+		convertSongInstrumentTracks(db, songTc);
 		convertPatternTracks(db, songTc, patternIdMap);
-		convertAutomationTracks(db, songTc);
+		convertAutomationTracks(db, songTc, "song_tc");
 		convertSampleTracks(db, songTc);
 	}
 
 	// Also check for automation/sample tracks directly in <song>
-	// (type 6 = HiddenAutomation tracks can be direct children)
 	if (!songElem.isNull())
 	{
-		convertAutomationTracks(db, songElem);
+		convertAutomationTracks(db, songElem, "song");
 		convertSampleTracks(db, songElem);
 	}
 

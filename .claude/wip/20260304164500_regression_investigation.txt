@@ -1,0 +1,36 @@
+TASK: Regression investigation across three LMMS repos
+STATUS: Complete - no regressions found
+
+Three repos compared:
+- DIRTY: /home/me/.src/github/LMMS/lmms (branch: copy-pattern-clips-to-new-track)
+- QOLI: ../change_pattern-tracks-qoli/ (branch: change/pattern-tracks-qoli)
+- CURRENT: . (branch: merge/sqlite-mcp)
+
+Files that differ (dirty vs current):
+- Track.cpp: code relocation only (normalizeTrackNames moved earlier in file)
+- Track.h: extra blank line
+- TrackOperationsWidget.cpp/.h: export/import pattern menu entries added
+- PatternEditor.cpp: whitespace
+- SongEditor.cpp: duplicate #include <cstdio>, added #include "Track.h"
+- MainWindow.cpp: comments removed, SQLite save menu item added
+
+Files that differ (qoli vs current):
+- AudioEngine.cpp: dead #if 0 code removed
+- DataFile.cpp: SQLite format support added
+- Track.cpp: added #include <cstdio>
+- SampleTrack.cpp: dead #if 0 code removed
+- TrackOperationsWidget.cpp/.h: full layout refactor (QHBoxLayout + TrackGrip), massive comments
+- TrackView.cpp/.h: TrackGrip related
+- PatternEditor.cpp/.h: massive comment additions, method reordering
+- SongEditor.cpp/.h: scroll helper refactor
+- PianoRoll.cpp/.h: scroll helper refactor (adjustLeftRightScoll)
+- MainWindow.cpp/.h: massive comments, SQLite save menu
+- Editor.cpp/.h, AutomationEditor.h: minor changes
+- SubWindow.cpp/.h, PixmapButton.cpp/.h, SampleWaveform.cpp: upstream fixes
+
+NONE of these differences affect audio rendering, note playback, or clip processing.
+
+The "no sound" bug is pre-existing (discussed 2026-02-18) and involves:
+- PianoRoll paste into wrong MidiClip context when copying between Song Editor
+  instrument tracks and PatternStore instrument tracks
+- Possibly related to how m_midiClip reference is maintained in PianoRoll

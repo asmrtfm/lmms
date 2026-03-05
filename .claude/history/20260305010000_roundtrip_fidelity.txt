@@ -1,0 +1,23 @@
+User: "fiis the fixes you were working on before last token reset and compacting which killed our progress"
+Then: "but use the Sounthendopus-hen.mmp file for your fidelity test"
+
+Response: Recovered context from WIP files. Found the reverted bug fixes (c0088e5f5) and
+in-progress schema v3 changes. Re-applied the safe fixes (PatternClipView unmute,
+PianoRoll post-paste unmute, type-aware length management) while leaving out the
+Track.cpp/MainWindow.cpp/TrackOperationsWidget.cpp changes that caused regressions.
+
+Created a SqliteRoundTripTest that loads Southendopus-hen.mmp and does MMP->SQLite->MMP.
+Initial test showed 146 tag differences across 224 tags. Found and fixed:
+
+1. Song-level instrument tracks (type=0) not stored - added container_type column,
+   convertSongInstrumentTracks(), exportSongInstrumentTracks() - recovered 3,942 notes
+2. Keymap doubling (10->20) - scales/keymaps stored in both song_ui_element and
+   dedicated tables - fixed by adding them to knownSongChildren exclusion set
+3. Controller connection FK violation - controller_id bound to 0 but no controller
+   exists - made nullable, bind NULL for inline controllers
+4. Empty <controllers> tag lost - now always emitted
+5. Automation track duplication - type=6 track in <song> also stored as UI element -
+   added "track" to knownSongChildren
+
+Final result: PERFECT round-trip. 0 tag differences, 0 attribute differences across
+224 tag types and 562,598 attributes. All 7 tests pass.

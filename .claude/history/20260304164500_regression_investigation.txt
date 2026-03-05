@@ -1,0 +1,29 @@
+User: Investigate regressions between dirty branch (LMMS/lmms, copy-pattern-clips-to-new-track),
+change/pattern-tracks-qoli branch, and current merge/sqlite-mcp branch. The user is experiencing
+a "no sound" bug after copying notes between instruments and wants to ensure no fixes were lost
+during cherry-pick to fork.
+
+Response: Performed exhaustive file-by-file comparison across all three repos for all C++ source
+files in src/core/, src/tracks/, src/gui/, and include/. Key findings:
+
+1. ALL audio-critical files are IDENTICAL across all three repos:
+   - InstrumentTrack.cpp/.h, NotePlayHandle.cpp/.h, InstrumentPlayHandle.cpp/.h
+   - PatternTrack.cpp/.h, Song.cpp/.h, MidiClip.cpp/.h, MidiClipView.cpp
+   - PatternClipView.cpp (copy-to-new-track feature), ClipView.cpp (merge clips)
+   - PianoRoll.cpp (copy/paste notes)
+
+2. Differences dirty vs current: Only cosmetic (code relocation in Track.cpp, whitespace,
+   removed comments in MainWindow.cpp, added includes for SQLite support)
+
+3. Differences qoli vs current: SQLite additions (DataFile, MainWindow), massive comment
+   additions, TrackGrip layout refactor in TrackOperationsWidget, scroll helper refactor
+   in PianoRoll/SongEditor, dead code removal in AudioEngine/SampleTrack. No functional
+   audio changes.
+
+4. The "no sound" bug was previously discussed in session 2026-02-18 and identified as a
+   pre-existing issue, NOT a regression from any of the feature work. The bug relates to
+   how PianoRoll paste interacts with the pattern system when copying notes between
+   instruments across different contexts (Song Editor instrument tracks vs PatternStore
+   instrument tracks).
+
+CONCLUSION: No regressions. No missing bug fixes. The sound bug exists in all three codebases.

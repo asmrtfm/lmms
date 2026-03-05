@@ -4429,8 +4429,11 @@ void PianoRoll::pasteNotes()
 			m_midiClip->addNote( cur_note, false );
 		}
 
-		// we only have to do the following lines if we pasted at
-		// least one note...
+		// Ensure the destination clip is playable after paste
+		if (m_midiClip->isMuted()) { m_midiClip->toggleMute(); }
+		// Finalize clip length to encompass all pasted notes
+		m_midiClip->updateLength();
+
 		Engine::getSong()->setModified();
 		update();
 		getGUI()->songEditor()->update();

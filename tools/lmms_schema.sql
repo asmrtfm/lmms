@@ -1,14 +1,14 @@
--- LMMS SQLite Project Format Schema v2
+-- LMMS SQLite Project Format Schema v3
 -- Replaces the monolithic XML .mmp/.mmpz format with a relational database.
--- All entities have proper ID-based references instead of position-based identification.
 --
 -- DESIGN PRINCIPLE: Every table has an extra_json column that captures ALL attributes
 -- and child elements not stored in named columns. This guarantees lossless round-trips.
+-- JSON columns store structured data IN the database — no external files.
 
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
--- Project metadata
+-- Project metadata (head element + root attributes)
 CREATE TABLE project (
     id INTEGER PRIMARY KEY DEFAULT 1,
     name TEXT,
@@ -17,14 +17,56 @@ CREATE TABLE project (
     timesig_denominator INTEGER NOT NULL DEFAULT 4,
     master_volume REAL NOT NULL DEFAULT 100,
     master_pitch REAL NOT NULL DEFAULT 0,
+    -- Root element attributes (lmms-project)
+    lmms_version TEXT NOT NULL DEFAULT '30',
+    project_type TEXT NOT NULL DEFAULT 'song',
+    creator TEXT NOT NULL DEFAULT 'LMMS',
+    creator_version TEXT NOT NULL DEFAULT '1.3.0-alpha',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     modified_at TEXT NOT NULL DEFAULT (datetime('now')),
     extra_json TEXT NOT NULL DEFAULT '{}'  -- all other <head> attributes
 );
 
+-- Song-level UI state elements (pianoroll, automationeditor, projectnotes, timeline, etc.)
+-- Each row stores one top-level <song> child element that is NOT a trackcontainer/mixer
+CREATE TABLE song_ui_element (
+    id INTEGER PRIMARY KEY,
+    element_name TEXT NOT NULL,  -- 'pianoroll', 'automationeditor', 'projectnotes', 'timeline', 'ControllerRackView'
+    attributes_json TEXT NOT NULL DEFAULT '{}',  -- all attributes on the element
+    children_json TEXT NOT NULL DEFAULT '{}',    -- all child elements serialized
+    content_text TEXT  -- CDATA/text content (e.g. project notes HTML)
+);
+
+-- Trackcontainer window state (song and patternstore)
+CREATE TABLE trackcontainer_state (
+    id INTEGER PRIMARY KEY,
+    container_type TEXT NOT NULL UNIQUE,  -- 'song' or 'patternstore'
+    visible INTEGER NOT NULL DEFAULT 1,
+    minimized INTEGER NOT NULL DEFAULT 0,
+    maximized INTEGER NOT NULL DEFAULT 0,
+    x INTEGER NOT NULL DEFAULT 0,
+    y INTEGER NOT NULL DEFAULT 0,
+    width INTEGER NOT NULL DEFAULT 1600,
+    height INTEGER NOT NULL DEFAULT 900,
+    extra_json TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Mixer window state (the <mixer> element attributes)
+CREATE TABLE mixer_state (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    visible INTEGER NOT NULL DEFAULT 0,
+    minimized INTEGER NOT NULL DEFAULT 0,
+    maximized INTEGER NOT NULL DEFAULT 0,
+    x INTEGER NOT NULL DEFAULT 0,
+    y INTEGER NOT NULL DEFAULT 0,
+    width INTEGER NOT NULL DEFAULT 865,
+    height INTEGER NOT NULL DEFAULT 278,
+    extra_json TEXT NOT NULL DEFAULT '{}'
+);
+
 -- Mixer channels
 CREATE TABLE mixer_channel (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY,  -- the mixer channel number (num attribute)
     name TEXT NOT NULL DEFAULT '',
     volume REAL NOT NULL DEFAULT 1.0,
     muted INTEGER NOT NULL DEFAULT 0,
@@ -52,12 +94,15 @@ CREATE TABLE effect (
     enabled INTEGER NOT NULL DEFAULT 1,
     wet REAL NOT NULL DEFAULT 1.0,
     gate REAL NOT NULL DEFAULT 0.0,
+    -- fxchain-level metadata stored on the first effect per owner
+    fxchain_enabled INTEGER NOT NULL DEFAULT 1,
     params_json TEXT NOT NULL DEFAULT '{}'  -- ALL other attributes and child elements
 );
 
--- Instrument tracks (live in PatternStore only)
+-- Instrument tracks (patternstore or song-level)
 CREATE TABLE instrument_track (
     id INTEGER PRIMARY KEY,
+    container_type TEXT NOT NULL DEFAULT 'patternstore',  -- 'patternstore' or 'song'
     name TEXT NOT NULL,
     volume REAL NOT NULL DEFAULT 100,
     panning REAL NOT NULL DEFAULT 0,
@@ -70,20 +115,13 @@ CREATE TABLE instrument_track (
     solo INTEGER NOT NULL DEFAULT 0,
     color TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
-    -- Instrument plugin
     instrument_plugin TEXT NOT NULL,
     instrument_params_json TEXT NOT NULL DEFAULT '{}',
-    -- Sound shaping (envelope/LFO for vol/cut/res)
     sound_shaping_json TEXT NOT NULL DEFAULT '{}',
-    -- Arpeggiator
     arpeggio_json TEXT NOT NULL DEFAULT '{}',
-    -- Chord creator
     chord_creator_json TEXT NOT NULL DEFAULT '{}',
-    -- MIDI port config
     midi_port_json TEXT NOT NULL DEFAULT '{}',
-    -- Microtuner
     microtuner_json TEXT NOT NULL DEFAULT '{}',
-    -- Catch-all for everything else (track attrs, instrumenttrack attrs, unknown children)
     track_extra_json TEXT NOT NULL DEFAULT '{}',
     instrumenttrack_extra_json TEXT NOT NULL DEFAULT '{}'
 );
@@ -96,7 +134,7 @@ CREATE TABLE pattern_track (
     solo INTEGER NOT NULL DEFAULT 0,
     color TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
-    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other <track> attributes
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Pattern clips (the rectangular objects on the Song Editor timeline)
@@ -110,7 +148,7 @@ CREATE TABLE pattern_clip (
     muted INTEGER NOT NULL DEFAULT 0,
     name TEXT,
     color TEXT,
-    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other attributes
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Patterns (the columns in the PatternStore grid)
@@ -120,18 +158,19 @@ CREATE TABLE pattern (
     sort_order INTEGER NOT NULL DEFAULT 0
 );
 
--- MIDI clips (cells in the PatternStore grid)
+-- MIDI clips (patternstore grid cells or song-level clips)
 CREATE TABLE midi_clip (
     id INTEGER PRIMARY KEY,
     instrument_track_id INTEGER NOT NULL REFERENCES instrument_track(id),
-    pattern_id INTEGER NOT NULL REFERENCES pattern(id),
+    pattern_id INTEGER REFERENCES pattern(id),  -- NULL for song-level instrument track clips
+    position INTEGER NOT NULL DEFAULT 0,  -- absolute song position for song-level clips
+    length INTEGER NOT NULL DEFAULT 0,    -- clip length for song-level clips
     clip_type INTEGER NOT NULL DEFAULT 1,  -- 0=beat, 1=melody
     steps INTEGER NOT NULL DEFAULT 32,
     muted INTEGER NOT NULL DEFAULT 0,
     name TEXT,
     color TEXT,
-    extra_json TEXT NOT NULL DEFAULT '{}',  -- all other attributes
-    UNIQUE(instrument_track_id, pattern_id)
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Notes (atomic musical events)
@@ -143,12 +182,12 @@ CREATE TABLE note (
     key INTEGER NOT NULL,
     volume INTEGER NOT NULL DEFAULT 100,
     panning INTEGER NOT NULL DEFAULT 0,
-    note_type INTEGER NOT NULL DEFAULT 0,  -- 0=regular, 1=step
-    extra_json TEXT NOT NULL DEFAULT '{}'   -- all other attributes
+    note_type INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX idx_note_clip_pos ON note(midi_clip_id, position);
 
--- Per-note detuning automation (rare, optional)
+-- Per-note detuning automation
 CREATE TABLE note_detuning (
     id INTEGER PRIMARY KEY,
     note_id INTEGER NOT NULL REFERENCES note(id),
@@ -170,7 +209,7 @@ CREATE TABLE sample_track (
     solo INTEGER NOT NULL DEFAULT 0,
     color TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
-    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other track/sampletrack attrs and children
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Sample clips
@@ -183,7 +222,7 @@ CREATE TABLE sample_clip (
     muted INTEGER NOT NULL DEFAULT 0,
     name TEXT,
     color TEXT,
-    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other attributes
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Automation tracks
@@ -194,7 +233,9 @@ CREATE TABLE automation_track (
     solo INTEGER NOT NULL DEFAULT 0,
     color TEXT,
     sort_order INTEGER NOT NULL DEFAULT 0,
-    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other track attrs
+    track_type INTEGER NOT NULL DEFAULT 5,
+    container_type TEXT NOT NULL DEFAULT 'song_tc',
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Automation clips
@@ -203,12 +244,12 @@ CREATE TABLE automation_clip (
     automation_track_id INTEGER NOT NULL REFERENCES automation_track(id),
     position INTEGER NOT NULL,
     length INTEGER NOT NULL,
-    progression_type INTEGER NOT NULL DEFAULT 1,  -- 0=discrete, 1=linear, 2=cubic
+    progression_type INTEGER NOT NULL DEFAULT 1,
     tension REAL NOT NULL DEFAULT 1.0,
     muted INTEGER NOT NULL DEFAULT 0,
     name TEXT,
     color TEXT,
-    extra_json TEXT NOT NULL DEFAULT '{}'  -- all other attributes
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );
 
 -- Automation nodes (time-value pairs within an automation clip)
@@ -228,14 +269,14 @@ CREATE INDEX idx_auto_node_clip_pos ON automation_node(automation_clip_id, posit
 CREATE TABLE automation_target (
     id INTEGER PRIMARY KEY,
     automation_clip_id INTEGER NOT NULL REFERENCES automation_clip(id),
-    target_object_id INTEGER NOT NULL,  -- JournallingObject ID from the XML
-    target_description TEXT  -- human-readable description if available
+    target_object_id INTEGER NOT NULL,
+    target_description TEXT
 );
 
 -- Controllers (LFO, MIDI CC, Peak)
 CREATE TABLE controller (
     id INTEGER PRIMARY KEY,
-    type TEXT NOT NULL,  -- 'lfo', 'midi', 'peak'
+    type TEXT NOT NULL,
     name TEXT NOT NULL DEFAULT '',
     params_json TEXT NOT NULL DEFAULT '{}'
 );
@@ -243,8 +284,30 @@ CREATE TABLE controller (
 -- Controller connections (links a controller to a model parameter)
 CREATE TABLE controller_connection (
     id INTEGER PRIMARY KEY,
-    owner_type TEXT NOT NULL,  -- entity type that owns the connected parameter
-    owner_id INTEGER NOT NULL, -- entity ID
-    param_name TEXT NOT NULL,  -- which parameter
-    controller_id INTEGER NOT NULL REFERENCES controller(id)
+    owner_type TEXT NOT NULL,  -- 'mixer_channel', 'instrument_track', etc.
+    owner_id INTEGER NOT NULL,
+    param_name TEXT NOT NULL,
+    controller_id INTEGER REFERENCES controller(id),  -- NULL for inline controllers
+    connection_json TEXT NOT NULL DEFAULT '{}'  -- full connection element attributes
+);
+
+-- Scales (microtonal scale definitions)
+CREATE TABLE scale (
+    id INTEGER PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    intervals_json TEXT NOT NULL DEFAULT '[]',
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+-- Keymaps (microtonal keyboard mappings)
+CREATE TABLE keymap (
+    id INTEGER PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    base_key INTEGER NOT NULL DEFAULT 69,
+    base_freq REAL NOT NULL DEFAULT 440.0,
+    first_key INTEGER NOT NULL DEFAULT 0,
+    last_key INTEGER NOT NULL DEFAULT 127,
+    middle_key INTEGER NOT NULL DEFAULT 60,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    extra_json TEXT NOT NULL DEFAULT '{}'
 );

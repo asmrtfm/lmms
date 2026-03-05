@@ -132,10 +132,8 @@ void PatternClipView::copySelectionToNewPatternTrack()
 			Clip* newClip = track->getClip(newPatternTrackIndex);
 			if (sClip)
 			{
-				// Copy full clip state (sample path, settings, etc.)
+				// TODO
 				Clip::copyStateTo(clip, newClip);
-				// Unmute destination — copyStateTo propagates mute from source
-				if (newClip->isMuted()) { newClip->toggleMute(); }
 			}
 			else if (mClip)
 			{
@@ -181,32 +179,17 @@ void PatternClipView::copySelectionToNewPatternTrack()
 			}
 			else if (aClip)
 			{
-				// Copy full clip state (automation nodes, connections, etc.)
+				// TODO
 				Clip::copyStateTo(clip, newClip);
-				// Unmute destination — copyStateTo propagates mute from source
-				if (newClip->isMuted()) { newClip->toggleMute(); }
 			}
 		}
 	}
-	// Update clip lengths for all tracks at the new pattern index.
-	// addSteps() only applies to BeatClips; MelodyClips use updateLength().
-	const int targetBars = maxNotePos.nextFullBar();
+	// Update the number of steps/bars for all tracks. For some reason addNote for midi clips does not update the length automatically.
 	for (const auto& track : Engine::patternStore()->tracks())
 	{
-		auto* mc = dynamic_cast<MidiClip*>(track->getClip(newPatternTrackIndex));
-		if (!mc) { continue; }
-		if (mc->type() == MidiClip::Type::BeatClip)
+		for (int i = 0; i < maxNotePos.getBar(); i++)
 		{
-			// Extend beat steps until the clip covers the target bar count
-			while (mc->length() < targetBars * TimePos::ticksPerBar())
-			{
-				mc->addSteps();
-			}
-		}
-		else
-		{
-			// MelodyClip — notes were added via addNote(), just finalize length
-			mc->updateLength();
+			static_cast<MidiClip*>(track->getClip(newPatternTrackIndex))->addSteps();
 		}
 	}
 

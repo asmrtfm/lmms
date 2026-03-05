@@ -820,29 +820,15 @@ void exportAutomationTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentE
 		QDomElement atSettings = doc.createElement("automationtrack");
 		trackElem.appendChild(atSettings);
 
-		// Automation clips — skip empty clips (zero nodes) that are default
-		// placeholders for global params (Numerator, Denominator, Tempo, etc.).
-		// LMMS auto-creates these on load; re-importing them causes duplicates.
+		// Automation clips
 		SqliteStmt clipStmt(db,
-			"SELECT ac.*, "
-			"(SELECT COUNT(*) FROM automation_node an WHERE an.automation_clip_id = ac.id) as node_count "
-			"FROM automation_clip ac "
-			"WHERE ac.automation_track_id = ? ORDER BY ac.position");
+			"SELECT * FROM automation_clip WHERE automation_track_id = ? ORDER BY position");
 		if (clipStmt.valid())
 		{
 			clipStmt.bindInt(1, atId);
 			while (clipStmt.step())
 			{
 				int clipId = clipStmt.colInt(0);
-				int nodeCount = clipStmt.colInt(10); // node_count from subquery
-
-				// Skip empty automation clips — LMMS will recreate defaults on load
-				if (nodeCount == 0)
-				{
-					logMsg("Skipping empty automation clip '%s' (0 nodes)",
-						clipStmt.colText(7).toUtf8().constData());
-					continue;
-				}
 
 				QDomElement clipElem = doc.createElement("automationclip");
 				clipElem.setAttribute("pos", clipStmt.colInt(2));     // position
@@ -901,18 +887,8 @@ void exportAutomationTracks(sqlite3* db, QDomDocument& doc, QDomElement& parentE
 			}
 		}
 
-		// Only emit the automation track if it has at least one non-empty clip
-		bool hasClips = !trackElem.firstChildElement("automationclip").isNull();
-		if (hasClips)
-		{
-			parentElem.appendChild(trackElem);
-			trackCount++;
-		}
-		else
-		{
-			logMsg("Skipping automation track '%s' (all clips empty)",
-				atStmt.colText(1).toUtf8().constData());
-		}
+		parentElem.appendChild(trackElem);
+		trackCount++;
 	}
 
 	if (trackCount > 0)

@@ -96,7 +96,6 @@ public:
 	static void normalizeTrackNames(TrackContainer* tc);
 
 
-
 	// pure virtual functions
 	Type type() const
 	{

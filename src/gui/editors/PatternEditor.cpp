@@ -430,9 +430,9 @@ PatternEditorWindow::PatternEditorWindow(PatternStore* ps) :
 	stretch->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 	trackAndStepActionsToolBar->addWidget(stretch);
 
+
 	// Normalize instrument track names
 	trackAndStepActionsToolBar->addAction(tr("Normalize names"), this, SLOT(normalizeInstrumentTrackNames()));
-
 
 	// Step management actions (apply to all instrument tracks in the current pattern)
 	trackAndStepActionsToolBar->addAction(embed::getIconPixmap("step_btn_reset"), tr("Reset steps"), //

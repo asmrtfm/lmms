@@ -62,7 +62,6 @@ public:
 	/// Return the TrackGrip handle widget used for drag-reordering this track
 	TrackGrip* getTrackGrip() const { return m_trackGrip; }
 
-
 protected:
 	/// Handle right-click to open the context menu (delegates to updateMenu)
 	void mousePressEvent( QMouseEvent * me ) override;

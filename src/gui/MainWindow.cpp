@@ -46,9 +46,7 @@
 #include "Engine.h"
 #include "ExportProjectDialog.h"
 #include "FileBrowser.h"
-#include "DataFile.h"
 #include "FileDialog.h"
-#include "Track.h"
 #include "Metronome.h"
 #include "MixerView.h"
 #include "GuiApplication.h"
@@ -1204,6 +1202,27 @@ void MainWindow::saveProjectAsDefaultTemplate()
 }
 
 
+
+
+/**
+ * @brief Slot: Saves the project with all pattern/beat data stripped out.
+ *
+ * This feature allows users to save a "clean" version of their project as either
+ * a template (.mpt) or project file (.mmp/.mmpz) that retains instrument tracks
+ * and their settings but removes all pattern clip data (notes, samples, automation).
+ *
+ * The process:
+ *   1. Shows a FileDialog defaulting to the user templates directory
+ *   2. Offers template (.mpt) and project (.mmpz/.mmp) filter options
+ *   3. Saves the full project to the chosen filename first
+ *   4. Re-reads the saved file as a DataFile (XML DOM)
+ *   5. Strips pattern data from the XML:
+ *      - Keeps the first PatternTrack (which holds the PatternStore with instrument definitions)
+ *      - Removes all PatternClip elements from that first PatternTrack
+ *      - Removes all clip data (midiclip, sampleclip, etc.) from tracks inside the PatternStore
+ *      - Removes any additional PatternTracks entirely
+ *   6. Writes the cleaned XML back to the file
+ */
 void MainWindow::saveProjectAsDefaultTemplateNoPatterns()
 {
 	// Determine the default project suffix from config (mmpz or mmp)
@@ -1253,28 +1272,38 @@ void MainWindow::saveProjectAsDefaultTemplateNoPatterns()
 	QDomElement content = dataFile.content();
 
 	// Step 3: Strip pattern data from the XML DOM
+	// Pattern tracks live inside the <trackcontainer> element within <song>.
+	// The first PatternTrack contains the PatternStore (with all instrument tracks
+	// and their settings). We keep that first PatternTrack so the instrument tracks
+	// are preserved, but strip all clip/note data and remove extra PatternTracks.
 	QDomElement trackContainer = content.firstChildElement("trackcontainer");
 	if (!trackContainer.isNull())
 	{
-		bool firstPatternTrackKept = false;
+		bool firstPatternTrackKept = false; // Flag to preserve only the first PatternTrack
 		QDomNode node = trackContainer.firstChild();
+		// Iterate through all child nodes of the track container
 		while (!node.isNull())
 		{
-			QDomNode next = node.nextSibling();
+			QDomNode next = node.nextSibling(); // Save next before potential removal
 			QDomElement elem = node.toElement();
+			// Check if this is a PatternTrack (Track::Type::Pattern)
 			if (!elem.isNull() && elem.tagName() == "track"
 				&& elem.attribute("type").toInt() == static_cast<int>(Track::Type::Pattern))
 			{
 				if (!firstPatternTrackKept)
 				{
+					// Keep the first PatternTrack (it holds the PatternStore)
+					// but strip its PatternClip children and clear clips inside PatternStore
 					firstPatternTrackKept = true;
 
-					// Remove PatternClip elements from this track
+					// Remove PatternClip elements from this track (these represent
+					// the clip instances placed on the song timeline)
 					QDomNode trackChild = elem.firstChild();
 					while (!trackChild.isNull())
 					{
 						QDomNode trackChildNext = trackChild.nextSibling();
 						QDomElement trackChildElem = trackChild.toElement();
+						// Remove <patternclip> elements
 						if (!trackChildElem.isNull() && trackChildElem.tagName() == "patternclip")
 						{
 							elem.removeChild(trackChild);
@@ -1288,12 +1317,14 @@ void MainWindow::saveProjectAsDefaultTemplateNoPatterns()
 					QDomElement patternStoreTC = patternTrackSettings.firstChildElement("trackcontainer");
 					if (!patternStoreTC.isNull())
 					{
+						// Iterate through all tracks inside the PatternStore
 						QDomNode psTrack = patternStoreTC.firstChild();
 						while (!psTrack.isNull())
 						{
 							QDomElement psTrackElem = psTrack.toElement();
 							if (!psTrackElem.isNull() && psTrackElem.tagName() == "track")
 							{
+								// Remove clip elements by matching known clip tag names
 								static const QStringList clipTagNames = {
 									"midiclip", "sampleclip", "automationclip", "patternclip"
 								};
@@ -1326,6 +1357,7 @@ void MainWindow::saveProjectAsDefaultTemplateNoPatterns()
 	// Step 4: Re-write the file without pattern data
 	dataFile.writeFile(fname);
 }
+
 
 
 /**

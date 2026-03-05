@@ -978,10 +978,20 @@ void convertAutomationTracks(SqliteDb& db, const QDomElement& parentElem)
 		sqlite3_int64 atId = db.lastInsertId();
 		atCount++;
 
-		// Automation clips
+		// Automation clips — skip empty default clips (no <time> nodes)
+		// that LMMS auto-creates for global params (Numerator, Tempo, etc.)
 		auto clips = findClipElements(trackElem, "automationclip");
 		for (const auto& clipElem : clips)
 		{
+			// Count time nodes to detect empty default clips
+			bool hasTimeNodes = !clipElem.firstChildElement("time").isNull();
+			if (!hasTimeNodes)
+			{
+				logMsg("Skipping empty automation clip '%s'",
+					clipElem.attribute("name", "").toUtf8().constData());
+				continue;
+			}
+
 			int clipPos = clipElem.attribute("pos", "0").toInt();
 			int clipLen = clipElem.attribute("len", "0").toInt();
 			int progression = clipElem.attribute("prog", "1").toInt();

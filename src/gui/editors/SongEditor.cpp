@@ -27,8 +27,6 @@
 #include <cmath>
 #include <cstdio>
 
-#include <cstdio>
-
 #include <QAction>
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -70,7 +68,6 @@
 #include "TextFloat.h"
 #include "TimeDisplayWidget.h"
 #include "TimeLineWidget.h"
-#include "Track.h"
 #include "TrackView.h"
 
 namespace lmms::gui

@@ -27,6 +27,7 @@
 
 #include <QWidget> // Base class for the widget
 
+class QCheckBox;   // Forward declaration for the selective clone selection checkbox
 class QPushButton; // Forward declaration for the track operations gear button
 
 namespace lmms::gui
@@ -61,6 +62,11 @@ public:
 
 	/// Return the TrackGrip handle widget used for drag-reordering this track
 	TrackGrip* getTrackGrip() const { return m_trackGrip; }
+
+	/// Show or hide the selective clone checkbox (used by PatternEditor in selection mode)
+	void setSelectiveCloneCheckboxVisible(bool visible);
+	/// Return whether this track is checked for inclusion in a selective clone operation
+	bool isSelectedForSelectiveClone() const;
 
 
 protected:
@@ -103,10 +109,11 @@ private slots:
 private:
 	TrackView * m_trackView;    ///< The parent TrackView that owns this widget
 
-	TrackGrip* m_trackGrip;     ///< Drag handle for reordering tracks by dragging
-	QPushButton * m_trackOps;   ///< The gear button that opens the context menu
-	PixmapButton * m_muteBtn;   ///< Toggle button to mute/unmute this track
-	PixmapButton * m_soloBtn;   ///< Toggle button to solo/unsolo this track
+	TrackGrip* m_trackGrip;                  ///< Drag handle for reordering tracks by dragging
+	QPushButton * m_trackOps;               ///< The gear button that opens the context menu
+	PixmapButton * m_muteBtn;               ///< Toggle button to mute/unmute this track
+	PixmapButton * m_soloBtn;               ///< Toggle button to solo/unsolo this track
+	QCheckBox * m_selectiveCloneCheckbox;   ///< Checkbox shown during Pattern Editor selective clone mode
 
 
 	friend class TrackView; ///< TrackView needs access to internal layout and buttons

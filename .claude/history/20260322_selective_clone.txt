@@ -1,0 +1,14 @@
+USER: Add new feature to the pattern-track editor called "Selective Clone" that when clicked, makes little checkboxes appear on each instrument track in the pattern-track editor. A "Cancel" button and a "Clone Selections"(confirm) button should also appear at the top. If I click "Clone Selections" (confirming my instrument track selections), it should make a clone of that pattern-track just like the existing clone track functionality but only copy over the notes for the instruments that were selected.
+
+RESPONSE:
+Implementing "Selective Clone" feature for the Pattern Editor.
+
+Changes:
+1. TrackOperationsWidget.h/cpp - Add QCheckBox for selection mode (hidden by default)
+2. PatternEditor.h/cpp - Add beginSelectiveClone/cancelSelectiveClone/executeSelectiveClone slots, selection banner widget
+3. PatternEditorWindow constructor - Add "Selective Clone" toolbar button
+
+Architecture:
+- Selection mode adds a banner QWidget above the scroll area (inserted into existing QVBoxLayout from TrackContainerView)
+- Each InstrumentTrack's TrackOperationsWidget gets a QCheckBox that is shown/hidden by PatternEditor
+- On confirm: creates new pattern via Track::create(Pattern), copies MidiClip data for selected tracks using Clip::copyStateTo()

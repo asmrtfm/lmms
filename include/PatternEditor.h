@@ -25,6 +25,8 @@
 #ifndef LMMS_GUI_PATTERN_EDITOR_H
 #define LMMS_GUI_PATTERN_EDITOR_H
 
+#include <QWidget>              // For the selection mode banner widget
+
 #include "Editor.h"             // Base class for PatternEditorWindow (provides toolbar framework)
 #include "TrackContainerView.h" // Base class for PatternEditor (provides track view management)
 
@@ -88,6 +90,8 @@ public slots:
 	void addAutomationTrack();
 	/// Duplicate the current pattern's clips across all tracks into a new pattern
 	void cloneClip();
+	/// Enter selective clone mode: show checkboxes on instrument tracks and the selection banner
+	void beginSelectiveClone();
 
 protected slots:
 	/// Handle drag-and-drop of instruments/presets into the editor
@@ -95,10 +99,21 @@ protected slots:
 	/// Scroll to and select the current pattern when the pattern selection changes
 	void updatePosition();
 
+private slots:
+	/// Exit selective clone mode without performing a clone; hides checkboxes and banner
+	void cancelSelectiveClone();
+	/// Execute the selective clone: create a new pattern and copy notes for checked tracks only
+	void executeSelectiveClone();
+
 private:
-	PatternStore* m_ps; ///< The PatternStore model this editor displays
+	PatternStore* m_ps;                ///< The PatternStore model this editor displays
+	bool m_inSelectiveCloneMode;       ///< True while the user is in selective clone selection mode
+	QWidget* m_selectionBanner;        ///< Banner shown at the top of the editor during selective clone mode
+
 	/// Internal helper: add or clone steps for all instrument tracks in the current pattern
 	void makeSteps( bool clone );
+	/// Internal helper: set selective clone checkbox visibility on all instrument track views
+	void setSelectiveCloneCheckboxesVisible(bool visible);
 };
 
 

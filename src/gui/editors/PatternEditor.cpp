@@ -25,6 +25,10 @@
 #include "PatternEditor.h"
 
 #include <QAction>           // For keyboard shortcut actions (pattern navigation)
+#include <QHBoxLayout>       // For the selection banner horizontal layout
+#include <QLabel>            // For the "Select tracks to clone:" label in the banner
+#include <QPushButton>       // For the Cancel and Clone Selections buttons in the banner
+#include <QVBoxLayout>       // For inserting the banner above the scroll area
 
 #include "ClipView.h"        // For BORDER_WIDTH constant used in minimum width calculation
 #include "ComboBox.h"        // Pattern selector dropdown widget
@@ -38,8 +42,10 @@
 #include "StringPairDrag.h"  // For decoding drag-and-drop data (track type and serialized XML)
 #include "TrackView.h"       // For iterating track views during pattern removal
 
+#include "Clip.h"            // For Clip::copyStateTo used in executeSelectiveClone
 #include "MidiClip.h"        // For casting clips to MidiClip to call step operations
 #include "Track.h"           // For Track::normalizeTrackNames used by normalize button
+#include "TrackOperationsWidget.h" // For setSelectiveCloneCheckboxVisible / isSelectedForSelectiveClone
 
 
 namespace lmms::gui
@@ -53,10 +59,39 @@ namespace lmms::gui
  * and stores a reference to it for direct access to pattern-specific methods.
  */
 PatternEditor::PatternEditor(PatternStore* ps) :
-	TrackContainerView(ps), // Initialize base class with the PatternStore as its model
-	m_ps(ps)                // Store direct reference for pattern-specific operations
+	TrackContainerView(ps),    // Initialize base class with the PatternStore as its model
+	m_ps(ps),                  // Store direct reference for pattern-specific operations
+	m_inSelectiveCloneMode(false),
+	m_selectionBanner(nullptr)
 {
 	setModel(ps); // Set the model on the TrackContainerView (redundant with constructor but explicit)
+
+	// Build the selection mode banner. It sits above the scroll area and is hidden by
+	// default; it becomes visible when the user activates selective clone mode.
+	m_selectionBanner = new QWidget(this);
+	m_selectionBanner->setObjectName("selectiveCloneBanner");
+	m_selectionBanner->setVisible(false);
+
+	auto* bannerLayout = new QHBoxLayout(m_selectionBanner);
+	bannerLayout->setContentsMargins(6, 3, 6, 3);
+	bannerLayout->setSpacing(6);
+
+	auto* bannerLabel = new QLabel(tr("Select instrument tracks to clone:"), m_selectionBanner);
+	auto* cancelBtn   = new QPushButton(tr("Cancel"),           m_selectionBanner);
+	auto* confirmBtn  = new QPushButton(tr("Clone Selections"), m_selectionBanner);
+
+	bannerLayout->addWidget(bannerLabel);
+	bannerLayout->addStretch(1);
+	bannerLayout->addWidget(cancelBtn);
+	bannerLayout->addWidget(confirmBtn);
+
+	connect(cancelBtn,  &QPushButton::clicked, this, &PatternEditor::cancelSelectiveClone);
+	connect(confirmBtn, &QPushButton::clicked, this, &PatternEditor::executeSelectiveClone);
+
+	// TrackContainerView sets up a QVBoxLayout containing the scroll area.
+	// Insert the banner before the scroll area so it appears at the top.
+	auto* mainLayout = static_cast<QVBoxLayout*>(layout());
+	mainLayout->insertWidget(0, m_selectionBanner);
 }
 
 
@@ -353,6 +388,121 @@ void PatternEditor::cloneClip()
 
 
 
+// ============================================================================
+// Selective Clone
+// ============================================================================
+
+/**
+ * @brief Show or hide the selective clone checkbox on every InstrumentTrack view.
+ *
+ * Non-instrument tracks (sample, automation) do not participate in selective
+ * cloning, so their checkboxes are left untouched.
+ *
+ * @param visible True to show checkboxes, false to hide them.
+ */
+void PatternEditor::setSelectiveCloneCheckboxesVisible(bool visible)
+{
+	for (TrackView* tv : trackViews())
+	{
+		if (tv->getTrack()->type() == Track::Type::Instrument)
+		{
+			tv->getTrackOperationsWidget()->setSelectiveCloneCheckboxVisible(visible);
+		}
+	}
+}
+
+
+/**
+ * @brief Enter selective clone mode.
+ *
+ * Shows the selection banner (with Cancel / Clone Selections buttons) and a
+ * checkbox on every InstrumentTrack in the Pattern Editor. The user can then
+ * tick the tracks they want to include before confirming.
+ *
+ * Calling this while already in selection mode is a no-op.
+ */
+void PatternEditor::beginSelectiveClone()
+{
+	if (m_inSelectiveCloneMode) { return; }
+	m_inSelectiveCloneMode = true;
+
+	m_selectionBanner->setVisible(true);
+	setSelectiveCloneCheckboxesVisible(true);
+}
+
+
+/**
+ * @brief Exit selective clone mode without performing any clone.
+ *
+ * Hides the selection banner and all track checkboxes, and resets the
+ * mode flag so the editor returns to normal operation.
+ */
+void PatternEditor::cancelSelectiveClone()
+{
+	m_inSelectiveCloneMode = false;
+	m_selectionBanner->setVisible(false);
+	setSelectiveCloneCheckboxesVisible(false);
+}
+
+
+/**
+ * @brief Perform the selective clone and exit selection mode.
+ *
+ * Creates a new empty pattern (equivalent to "New pattern"), then copies the
+ * MidiClip content from the current pattern into the new pattern — but only
+ * for the InstrumentTracks whose checkboxes are checked. Unselected tracks
+ * remain empty in the new pattern. After cloning, the editor switches to
+ * display the newly created pattern and returns to normal mode.
+ */
+void PatternEditor::executeSelectiveClone()
+{
+	auto* ps = static_cast<PatternStore*>(model());
+	const int sourcePattern = ps->currentPattern();
+
+	// Collect which InstrumentTracks the user has marked for inclusion.
+	QSet<Track*> selectedTracks;
+	for (TrackView* tv : trackViews())
+	{
+		if (tv->getTrack()->type() == Track::Type::Instrument
+			&& tv->getTrackOperationsWidget()->isSelectedForSelectiveClone())
+		{
+			selectedTracks.insert(tv->getTrack());
+		}
+	}
+
+	// Create a new empty pattern. The PatternTrack constructor automatically
+	// creates empty clips in PatternStore for all InstrumentTracks.
+	auto* newPatternTrack = static_cast<PatternTrack*>(
+		Track::create(Track::Type::Pattern, Engine::getSong())
+	);
+	const int destPattern = newPatternTrack->patternIndex();
+
+	// Copy full clip state (notes, step data, length) from the source pattern
+	// into the destination pattern — only for selected InstrumentTracks.
+	for (Track* track : ps->tracks())
+	{
+		if (track->type() != Track::Type::Instrument) { continue; }
+		if (!selectedTracks.contains(track)) { continue; }
+
+		Clip* sourceClip = track->getClip(sourcePattern);
+		Clip* destClip   = track->getClip(destPattern);
+		Clip::copyStateTo(sourceClip, destClip);
+	}
+
+	// Normalize track names in both containers so the new pattern track name
+	// (and any instrument track names) comply with project naming conventions
+	// (whitespace -> underscores, strip "Clone of" prefixes, resolve conflicts).
+	// This mirrors the normalization applied by export and import operations.
+	Track::normalizeTrackNames(Engine::getSong());
+	Track::normalizeTrackNames(ps);
+
+	// Switch the editor to display the newly created pattern.
+	ps->setCurrentPattern(destPattern);
+
+	cancelSelectiveClone();
+}
+
+
 /**
  * @brief Construct the Pattern Editor window with toolbar and all controls.
  *
@@ -419,7 +569,9 @@ PatternEditorWindow::PatternEditorWindow(PatternStore* ps) :
 	trackAndStepActionsToolBar->addAction(embed::getIconPixmap("add_pattern_track"), tr("New pattern"),
 						Engine::getSong(), SLOT(addPatternTrack()));       // Create new PatternTrack in Song
 	trackAndStepActionsToolBar->addAction(embed::getIconPixmap("clone_pattern_track_clip"), tr("Clone pattern"),
-						m_editor, SLOT(cloneClip()));                      // Duplicate current pattern
+						m_editor, SLOT(cloneClip()));                      // Duplicate current pattern (all tracks)
+	trackAndStepActionsToolBar->addAction(embed::getIconPixmap("clone_pattern_track_clip"), tr("Selective Clone"),
+						m_editor, SLOT(beginSelectiveClone()));            // Clone pattern with user-selected tracks only
 	trackAndStepActionsToolBar->addAction(embed::getIconPixmap("add_sample_track"),	tr("Add sample-track"),
 						m_editor, SLOT(addSampleTrack()));                 // Add sample track to PatternStore
 	trackAndStepActionsToolBar->addAction(embed::getIconPixmap("add_automation"), tr("Add automation-track"),

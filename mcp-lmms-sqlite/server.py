@@ -419,6 +419,7 @@ def project_add_note(
     key: int,
     volume: int = 100,
     panning: int = 0,
+    detuning: float = 0.0,
 ) -> str:
     """Add a note to a MIDI clip in a .lmms-db project.
 
@@ -430,6 +431,9 @@ def project_add_note(
         key: MIDI key number (0-127, 69=A4).
         volume: Note velocity (0-127).
         panning: Note panning (-100 to 100).
+        detuning: Pitch detuning in semitones (e.g. 0.1 = +10 cents,
+                  -0.14 = -14 cents). Used for microtonal tuning like
+                  the 22 shruti system.
     """
     try:
         with open_project(db_path) as conn:
@@ -443,7 +447,18 @@ def project_add_note(
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (midi_clip_id, position, length, key, volume, panning),
             )
-            return _ok(id=cursor.lastrowid, midi_clip_id=midi_clip_id)
+            note_id = cursor.lastrowid
+            # Insert per-note detuning for microtonal pitch adjustment
+            if detuning != 0.0:
+                det_id = _next_id(conn, "note_detuning")
+                conn.execute(
+                    """INSERT INTO note_detuning (id, note_id, position, value,
+                       in_tangent, out_tangent)
+                       VALUES (?, ?, 0, ?, 0, 0)""",
+                    (det_id, note_id, detuning),
+                )
+            return _ok(id=note_id, midi_clip_id=midi_clip_id,
+                       detuning=detuning)
     except (FileNotFoundError, ValueError, sqlite3.Error) as e:
         return _err(str(e))
 
@@ -549,6 +564,52 @@ def project_update_mixer_channel(
                 values + [channel_id],
             )
             return _ok(status="updated", channel_id=channel_id)
+    except (FileNotFoundError, ValueError, sqlite3.Error) as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def project_create_mixer_channel(
+    db_path: str,
+    name: str,
+    volume: float = 1.0,
+    muted: int = 0,
+    route_to_master: bool = True,
+) -> str:
+    """Create a new mixer channel in a .lmms-db project.
+
+    Auto-assigns the next available channel ID and sort_order.
+    Optionally creates a route (send) to channel 0 (Master).
+
+    Args:
+        db_path: Path to the .lmms-db project file.
+        name: Display name for the mixer channel.
+        volume: Channel volume (default 1.0).
+        muted: Whether the channel is muted (default 0).
+        route_to_master: If True, create a send route to Master channel (default True).
+    """
+    try:
+        with open_project(db_path) as conn:
+            # Auto-assign next channel ID
+            channel_id = _next_id(conn, "mixer_channel")
+            sort_order = channel_id  # sort_order mirrors channel ID by default
+
+            conn.execute(
+                "INSERT INTO mixer_channel (id, name, volume, muted, soloed, color, sort_order, extra_json)"
+                " VALUES (?, ?, ?, ?, 0, NULL, ?, '{}')",
+                (channel_id, name, volume, muted, sort_order),
+            )
+
+            # Route to Master (channel 0) unless opted out
+            if route_to_master:
+                route_id = _next_id(conn, "mixer_route")
+                conn.execute(
+                    "INSERT INTO mixer_route (id, from_channel_id, to_channel_id, amount)"
+                    " VALUES (?, ?, 0, 1.0)",
+                    (route_id, channel_id),
+                )
+
+            return _ok(status="created", channel_id=channel_id, name=name)
     except (FileNotFoundError, ValueError, sqlite3.Error) as e:
         return _err(str(e))
 
@@ -1672,6 +1733,67 @@ def _insert_row(conn: sqlite3.Connection, table: str, data: dict) -> int:
     return cursor.lastrowid
 
 
+def _ensure_pattern_track(
+    conn: sqlite3.Connection,
+    pattern_id: int | None,
+    note_list: list | None,
+) -> None:
+    """Ensure at least one pattern_track + pattern_clip exists for Song Editor visibility.
+
+    Without a pattern_track, SqliteToXml never attaches the patternstore to the
+    XML document and the project appears empty in LMMS. Also calculates correct
+    pattern_clip length from notes so playback works.
+    """
+    existing = conn.execute("SELECT id FROM pattern_track LIMIT 1").fetchone()
+    if existing is not None:
+        return  # already have pattern tracks
+
+    # Use the first pattern or default to creating one
+    if pattern_id is None:
+        pattern = conn.execute(
+            "SELECT id FROM pattern ORDER BY sort_order LIMIT 1"
+        ).fetchone()
+        if pattern is None:
+            return  # no patterns exist at all
+        pattern_id = pattern["id"]
+
+    # Calculate pattern_clip length from notes in this pattern
+    clip_length = 0
+    if note_list:
+        clip_length = max(
+            n.get("position", 0) + n.get("length", 0) for n in note_list
+        )
+    if clip_length <= 0:
+        # Query max note extent from DB for this pattern
+        row = conn.execute(
+            "SELECT COALESCE(MAX(n.position + n.length), 0) "
+            "FROM note n JOIN midi_clip mc ON n.midi_clip_id = mc.id "
+            "WHERE mc.pattern_id = ?",
+            (pattern_id,),
+        ).fetchone()
+        clip_length = row[0] if row else 0
+    # Round up to next full bar (768 ticks in 4/4 at 192 ticks/beat)
+    ticks_per_bar = 192 * 4
+    if clip_length > 0:
+        clip_length = ((clip_length + ticks_per_bar - 1) // ticks_per_bar) * ticks_per_bar
+    else:
+        clip_length = ticks_per_bar  # default 1 bar
+
+    pt_id = _next_id(conn, "pattern_track")
+    conn.execute(
+        "INSERT INTO pattern_track (id, name, muted, solo, sort_order, extra_json) "
+        "VALUES (?, 'Pattern 0', 0, 0, 0, ?)",
+        (pt_id, json.dumps({"mutedBeforeSolo": "0"})),
+    )
+
+    pc_id = _next_id(conn, "pattern_clip")
+    conn.execute(
+        "INSERT INTO pattern_clip (id, pattern_track_id, pattern_id, position, length, muted, extra_json) "
+        "VALUES (?, ?, ?, 0, ?, 0, '{}')",
+        (pc_id, pt_id, pattern_id, clip_length),
+    )
+
+
 def _insert_mixer_channel(conn: sqlite3.Connection, channel_data: dict | None) -> int | None:
     """Insert a mixer channel from template, returning new channel ID.
 
@@ -2238,6 +2360,16 @@ def project_create_instrument_track(
                         (note_id, clip_id, note["position"], note["length"],
                          note["key"], note.get("volume", 100), note.get("panning", 0)),
                     )
+                    # Per-note detuning for microtonal tuning (value in semitones)
+                    note_detuning = note.get("detuning", 0.0)
+                    if note_detuning != 0.0:
+                        det_id = _next_id(conn, "note_detuning")
+                        conn.execute(
+                            """INSERT INTO note_detuning (id, note_id, position, value,
+                               in_tangent, out_tangent)
+                               VALUES (?, ?, 0, ?, 0, 0)""",
+                            (det_id, note_id, note_detuning),
+                        )
                     notes_inserted += 1
 
             # Add effects with proper defaults
@@ -2258,6 +2390,11 @@ def project_create_instrument_track(
                      eff_merged),
                 )
                 effects_inserted += 1
+
+            # Ensure a pattern_track exists for the Song Editor to display the
+            # patternstore. Without at least one pattern_track, SqliteToXml
+            # never attaches the patternstore to the XML document.
+            _ensure_pattern_track(conn, pattern_id if note_list else None, note_list)
 
             return _ok(
                 track_id=track_id,

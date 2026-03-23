@@ -10,7 +10,7 @@ LMMS (Linux MultiMedia Studio) is a free, cross-platform digital audio workstati
 
 ```bash
 # Configure (out-of-tree build, recommended)
-mkdir build && cd build
+mkdir -p build && cd build
 cmake .. -DCMAKE_INSTALL_PREFIX=../target
 
 # Build

@@ -1,8 +1,7 @@
 {
   "mcpServers": {
     "lmms-mcp": {
-      "command": "/home/me/.local/bin/lmms-mcp",
-      "type": "stdio"
+      "command": "/home/me/.local/bin/lmms-mcp"
     }
   }
 }

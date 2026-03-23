@@ -1,0 +1,32 @@
+TASK: Duplicate instrument track label handling + mixer channel import remapping
+STATUS: Both implemented, awaiting user testing
+
+== COMPLETED ==
+
+1. Duplicate instrument track label normalization
+   - Added normalizeTrackLabel() in XmlToSqlite.cpp (same rules as Track::normalizeTrackNames)
+   - Steps: remove "Clone of" prefix, replace whitespace with underscores, append _001/_002 for conflicts
+   - Applied to: patternstore instrument tracks, song instrument tracks, pattern tracks
+   - Each container maintains its own usedNames set for independent normalization
+   - Verified: "delayedgratis" x3 -> delayedgratis, delayedgratis_001, delayedgratis_002
+   - Verified: "Chip Bass 3" x4 -> Chip_Bass_3, Chip_Bass_3_001, Chip_Bass_3_002, Chip_Bass_3 (different container)
+
+2. Mixer channel import remapping (TrackOperationsWidget.cpp)
+   - Parses <mixerchannels> section from .xppt file
+   - For each exported mixer channel:
+     - If channel number is in use: createChannel() at next available, add to remap table
+     - If channel number doesn't exist: create channels up to that index
+     - If no conflict: use original number
+   - Copies channel settings: name, color, volume, mute, solo, effects chain
+   - Sets up sends with remapped indices (second pass after all channels created)
+   - Rewrites mixch/fxch attributes in DOM before loadTrackSpecificSettings
+   - Export side was already done (previous session)
+
+Files changed:
+- src/core/XmlToSqlite.cpp (normalizeTrackLabel, applied to all track containers)
+- src/gui/tracks/TrackOperationsWidget.cpp (mixer channel import remapping)
+
+== STILL TODO ==
+- User testing of ZynAddSubFX sound with fresh .lmms-db
+- User testing of mixer channel remapping via pattern import
+- Update documentation after user confirms changes are valid

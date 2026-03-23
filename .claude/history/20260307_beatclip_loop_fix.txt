@@ -1,0 +1,37 @@
+## User Request
+User noted that while the copy-to-new-pattern-track fix (shared pattern length) restored
+functionality, the looping mechanism for beatClips is still broken.
+
+## Analysis
+The previous fix changed ALL MidiClips to use `patternLength` (shared pattern length)
+as the repetition period. This was correct for MelodyClips but wrong for BeatClips.
+
+BeatClips and MelodyClips loop differently:
+- BeatClips loop at their own length (step grid repeats, e.g. 16 steps = 1 bar loop)
+- MelodyClips loop at the shared pattern length (max across all tracks)
+
+## Fix Applied
+In PatternClipView.cpp, the repetition period now depends on clip type:
+```cpp
+tick_t repeatPeriod = (mClip->type() == MidiClip::Type::BeatClip)
+    ? static_cast<tick_t>(mClip->length()) : patternLength;
+```
+
+This means:
+- BeatClips: `maxPossibleRepetitions = clipLength / mClip->length() + 2`
+  (loops at own length, producing correct repetitions within the pattern clip window)
+- MelodyClips: `maxPossibleRepetitions = clipLength / patternLength + 2`
+  (loops at shared pattern length, preventing ghost notes from short clips)
+
+## Separate Issue: Audio Engine BeatClip Looping
+There may also be a pre-existing issue in the audio engine where BeatClips don't
+loop within the shared pattern length. `PatternStore::play()` wraps position at
+the shared length, but InstrumentTrack::play() just scans notes at exact positions
+with no inner BeatClip looping. A 1-bar BeatClip in a 3-bar pattern plays once
+then goes silent. This is NOT fixed here -- it's in the playback engine, not the
+copy feature.
+
+## Verification
+- Build: clean
+- PatternCopyTest: 14/14 pass
+- Full suite: 8/8 pass

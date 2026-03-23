@@ -1,0 +1,23 @@
+User: (Continued from previous session) Investigating ZynAddSubFX no-sound and phantom
+automation track bugs in .lmms-db round-trip.
+
+Response: Identified and fixed two root causes:
+
+1. ZynAddSubFX no-sound: QJsonObject sorts keys alphabetically, destroying XML element
+   ordering. ZynAddSubFX parser is order-sensitive. Fix: Store _order array in JSON
+   (every child element tag in sequence), use it during reconstruction to emit elements
+   in original order.
+
+2. Phantom automation track: Song-level HiddenAutomation track (type 6) was stored
+   without container distinction. On export, placed into trackcontainer as type 5
+   (visible Automation). Fix: Added container_type and track_type columns to
+   automation_track table.
+
+Verification results on SouthendRevivalAgain.mmp:
+- 29/29 ZynAddSubFX instances: PERFECT element ordering match
+- 0 automation tracks in trackcontainer (was 1 before fix)
+- 1 HiddenAutomation track at song level with correct type=6
+- 0 tag differences, 1,108,398 matching attributes
+- All 7 tests pass
+
+Awaiting user testing of ZynAddSubFX sound with fresh .lmms-db.

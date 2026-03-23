@@ -1,0 +1,15 @@
+User: Multiple tasks - fix lmms-db ZynAddSubFX no-sound, set up rubot/lmms-mcp automation,
+investigate bash ! pitfall, remove python prototype tools, continue mixer channel work.
+
+Key findings:
+1. ZynAddSubFX no-sound root cause: XML text content lost during round-trip
+   - elemToJson() used QDomElement::text() which concatenates ALL descendant text nodes
+   - jsonToXml() skipped "_text" key entirely instead of restoring as text content
+   - Fix: elemToJson iterates direct text/CDATA children only; jsonToXml creates text nodes
+
+2. lmms-mcp was broken (ModuleNotFoundError), reinstalled from project source
+3. Python tools (lmms_export.py, lmms_convert.py) backed up to ../python-tools-backup/ and removed
+4. Bash ! pitfall documented in memory and ingested into rubot
+
+Response: Fixed both XmlToSqlite.cpp and SqliteToXml.cpp. Round-trip test passes perfectly.
+Awaiting user confirmation before updating documentation.

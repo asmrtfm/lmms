@@ -607,6 +607,9 @@ ENDIF(WANT_DEBUG_FPE)
 # check for libsamplerate
 FIND_PACKAGE(Samplerate 0.1.8 MODULE REQUIRED)
 
+# check for SQLite3 (for .lmms-db project format support)
+FIND_PACKAGE(SQLite3 REQUIRED)
+
 IF(NOT CMAKE_BUILD_TYPE)
 	message(STATUS "Setting build type to 'Release' as none was specified.")
 	set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)

@@ -1,0 +1,21 @@
+User: Reported that project_create_instrument_track produced broken tracks (LMMS loaded them as "dummy" instrument). Wanted to fix the MCP server to create real tracks, and learn to add more plugin defaults over time.
+
+Response:
+1. Created `mcp-lmms-sqlite/lmms_defaults.py` with:
+   - Track subsystem defaults (sound_shaping, arpeggio, chord_creator, midi_port, track_extra, instrumenttrack_extra)
+   - Instrument plugin defaults (tripleoscillator, kicker, audiofileprocessor)
+   - Effect plugin defaults (reverbsc, delay)
+   - Helper functions: normalize_plugin_name, get_instrument_defaults, get_effect_defaults, get_track_subsystem_defaults, merge_params
+
+2. Modified `server.py`:
+   - `project_create_instrument_track`: normalizes plugin name to lowercase, merges user params over plugin defaults, populates all 16 instrument_track columns including subsystem JSONs, normalizes effect names in inline loop
+   - `project_add_effect`: normalizes plugin name, merges user params over effect defaults
+
+3. Verified end-to-end: created blank project, added TripleOscillator track with C minor melody and ReverbSC, exported to .mmp, user confirmed both .lmms-db and .mmp load correctly in LMMS.
+
+Key learnings:
+- Plugin names must be lowercase in save files (e.g., "tripleoscillator" not "TripleOscillator")
+- All track subsystem JSON fields must be populated with LMMS defaults or LMMS falls back to "dummy"
+- Effect params_json needs actual default values, not empty "{}"
+- journallingObject entries are runtime-assigned by LMMS and should be omitted from defaults
+- All parameter values are strings (matching XML attribute convention)

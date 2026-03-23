@@ -1,0 +1,51 @@
+## User Request
+User reported noctilux.lmms-db appears as "completely empty project" when opened in LMMS GUI.
+
+## Root Cause Analysis
+
+Two separate bugs in the MCP server's `project_create_instrument_track`:
+
+### Bug 1: Missing pattern_track (project appears empty)
+`project_create_instrument_track` creates instrument tracks in the patternstore and
+midi_clips, but never creates a `pattern_track` in the Song Editor. In SqliteToXml.cpp,
+the patternstore element is only attached to the XML document via the FIRST pattern_track
+(line 1052-1056). With zero pattern_tracks, the patternstore is a detached element and
+all instrument tracks are invisible.
+
+### Bug 2: pattern_clip length=0 (silent playback)
+PatternClip::loadSettings (line 81) calls `changeLength(element.attribute("len").toInt())`.
+When the pattern_clip has `length=0`, the PatternClip has zero duration and plays nothing.
+The correct length should be calculated from the max note extent, rounded up to full bars.
+
+## Fixes Applied
+
+### MCP server (mcp-lmms-sqlite/server.py)
+1. Added `_ensure_pattern_track()` helper that:
+   - Checks if any pattern_track exists; returns early if so
+   - Calculates correct pattern_clip length from note data
+   - Rounds up to next full bar (768 ticks in 4/4)
+   - Creates pattern_track + pattern_clip with correct length
+
+2. `project_create_instrument_track` now calls `_ensure_pattern_track()` after
+   creating notes and effects
+
+3. Added `project_create_mixer_channel` tool (from previous session)
+
+### Noctilux project direct fixes
+- Added pattern_track (id=1, name="Pattern 0")
+- Added pattern_clip (id=1, pattern_track_id=1, pattern_id=1, position=0, length=3072)
+- Created 5 mixer channels (Kick, Sub Bass, Atmosphere, Noctilux Lead, Hi-Hat)
+- Created 5 mixer routes to Master
+- Updated all 5 instrument tracks to reference their mixer channels
+
+## Verification
+- Render test: 48 seconds of audio, max amplitude 32767 (was 0 before fix)
+- Standalone test project: 10 seconds of audio, works correctly
+- Reference project analysis: henrys_illegal_viking_funeral.lmms-db has 86 pattern_tracks,
+  86 patterns, 0 pattern_clips (Song Editor has tracks but no clips placed; playback is
+  from Pattern Editor)
+
+## Key Architecture Insight
+In LMMS, the patternstore is embedded INSIDE the first pattern_track's XML element.
+Without at least one pattern_track, the patternstore and all its instrument tracks
+are simply not part of the document.

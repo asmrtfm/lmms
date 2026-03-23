@@ -1,0 +1,3 @@
+User: Reported build error - redefinition of `MainWindow::saveProjectAsDefaultTemplateNoPatterns()` at lines 1207 and 1350 in src/gui/MainWindow.cpp.
+
+Response: Found and removed the duplicate function definition (the second copy at lines 1331-1483, which was identical but with more verbose comments). Kept the first definition at line 1207. The duplicate was likely introduced during a merge.

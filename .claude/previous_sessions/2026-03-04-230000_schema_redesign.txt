@@ -1,0 +1,41 @@
+TASK: Complete SQLite schema redesign - eliminate ALL JSON columns
+STATUS: In progress
+
+REQUIREMENTS (from user):
+1. ALL database tables must use UUID primary keys (TEXT type)
+2. NO JSON columns anywhere - everything in proper tables/associations
+3. Every single XML key and value must be stored, no matter how duplicated
+4. Never try to keep things DRY - mirror LMMS's XML structure faithfully
+5. Database must be self-contained - any track can reconstitute itself
+6. Mixer channels: on import, always create NEW channel with same effects/settings
+7. No hardcoded mixer channel numbers
+
+APPROACH:
+- Replace all *_json columns with a generic element/attribute table structure
+- Use an EAV (Entity-Attribute-Value) approach for plugin-specific settings
+- Store the full XML tree structure in tables so any nesting depth is supported
+
+NEW TABLES TO REPLACE JSON:
+1. xml_element - stores hierarchical XML elements with parent-child relationships
+   - id TEXT (UUID), parent_id TEXT (UUID, nullable), entity_type TEXT, entity_id TEXT,
+     tag_name TEXT, sort_order INTEGER
+2. xml_attribute - stores key-value pairs for each element
+   - id TEXT (UUID), element_id TEXT (UUID), key TEXT, value TEXT
+
+This replaces: extra_json, params_json, instrument_params_json, sound_shaping_json,
+arpeggio_json, chord_creator_json, midi_port_json, microtuner_json,
+track_extra_json, instrumenttrack_extra_json
+
+FILES TO MODIFY:
+1. tools/lmms_schema.sql - complete rewrite
+2. src/core/XmlToSqlite.cpp - rewrite to store in new tables
+3. src/core/SqliteToXml.cpp - rewrite to read from new tables
+4. tools/lmms_export.py - update if exists
+5. tools/lmms_convert.py - update if exists
+6. MCP server schema if applicable
+
+MIXER CHANNEL IMPORT STRATEGY:
+- When a track references a mixer channel, store the FULL mixer channel definition
+  (all effects, routes, settings) as part of that track's data
+- On import, create a new mixer channel with the stored settings
+- Link the imported track to the new mixer channel

@@ -1,0 +1,84 @@
+
+    ✻
+    |
+   ▟█▙     Claude Code v2.1.50
+ ▐▛███▜▌   Sonnet 4.6 · Claude Pro
+▝▜█████▛▘  ~/.src/github/LMMS/lmms
+  ▘▘ ▝▝  
+
+❯ The import pattern-tracks feature still isn't respecting the track's      
+  names. You were supposed to make it use the basename of the pattern-track 
+   file as their name                                                       
+
+● Let me look at the import patterns code to find where track names are set.
+
+● Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+● Let me read more of both functions to see the complete picture.
+
+● Read 2 files (ctrl+o to expand)
+
+● The fix is needed in two places: after creating newPatternTrack, set its name
+  from the file's basename. Both import functions need this.
+
+  In SongEditor.cpp the name is never set on newly created PatternTracks. In
+  TrackOperationsWidget.cpp same issue for both the existing track and new ones
+  created for multiple files.
+
+● Update(src/gui/editors/SongEditor.cpp)
+  ⎿  Added 3 lines
+      1429      auto* newTrack = Track::create(Track::Type::Pattern, Engi
+            ne::getSong());
+      1430      auto* newPatternTrack = dynamic_cast<PatternTrack*>(newTr
+            ack);
+      1431      if (!newPatternTrack) { continue; }
+      1432 +    const QString baseName = QFileInfo(files[i]).baseName(); 
+      1433 +    fprintf(stderr, "[importPatterns] Setting PatternTrack na
+           +me to '%s'\n", baseName.toUtf8().constData());               
+      1434 +    newPatternTrack->setName(baseName);                      
+      1435      importSingleFile(newPatternTrack->patternIndex(), files[i
+            ]);
+      1436    }
+      1437  
+
+● Now fix the TrackOperationsWidget version — rename the existing track for the
+  first file, and new tracks for subsequent files:
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 6 lines
+      866  
+      867    Engine::audioEngine()->requestChangeInModel();
+      868  
+      869 +  const QString firstName = QFileInfo(files[0]).baseName();   
+      870 +  fprintf(stderr, "[importPattern] Renaming PatternTrack to '%
+          +s'\n", firstName.toUtf8().constData());                       
+      871 +  patternTrack->setName(firstName);                           
+      872    importSingleFile(patternTrack->patternIndex(), files[0]);
+      873  
+      874    for (int i = 1; i < files.size(); ++i)
+     ...
+      876      auto* newTrack = Track::create(Track::Type::Pattern, Engin
+           e::getSong());
+      877      auto* newPatternTrack = dynamic_cast<PatternTrack*>(newTra
+           ck);
+      878      if (!newPatternTrack) { continue; }
+      879 +    const QString baseName = QFileInfo(files[i]).baseName();  
+      880 +    fprintf(stderr, "[importPattern] Setting PatternTrack name
+          + to '%s'\n", baseName.toUtf8().constData());                  
+      881 +    newPatternTrack->setName(baseName);                       
+      882      importSingleFile(newPatternTrack->patternIndex(), files[i]
+           );
+      883    }
+      884  
+
+● Both import paths now:
+  - SongEditor.cpp (importPatterns toolbar button): sets each new PatternTrack's
+   name to QFileInfo(file).baseName() before calling importSingleFile
+  - TrackOperationsWidget.cpp (importPattern right-click): renames the existing
+  PatternTrack for the first file, and names each newly created PatternTrack for
+   subsequent files
+
+  Both log the name being applied via fprintf(stderr, ...) so you can verify it
+  in the terminal.
+
+✻ Baked for 50s

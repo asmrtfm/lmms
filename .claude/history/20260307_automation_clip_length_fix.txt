@@ -1,0 +1,21 @@
+## User Request
+Automation clips in the pattern store are preventing pattern tracks from looping.
+Their length extends seemingly into infinity, extending the shared pattern length.
+
+## Root Cause
+`PatternStore::lengthOfPattern()` iterates ALL tracks (including automation) and
+takes max `clip->length()`. AutomationClip::updateLength() only grows (never shrinks):
+`changeLength(std::max(length(), timeMapLength()))`. When an automation clip gets
+an inflated length, it extends the shared pattern length, breaking looping for
+all tracks in that pattern.
+
+## Fix Applied
+In `PatternStore::lengthOfPattern()` (src/core/PatternStore.cpp), skip automation
+tracks (both `Track::Type::Automation` and `Track::Type::HiddenAutomation`) when
+computing the shared pattern length. Automation tracks should conform to the length
+defined by instrument/sample tracks, not extend it.
+
+## Verification
+- Build: clean
+- Full test suite: 8/8 pass
+- PatternCopyTest: 14/14 pass

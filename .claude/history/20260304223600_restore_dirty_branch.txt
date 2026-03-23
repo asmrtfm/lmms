@@ -1,0 +1,14 @@
+User: "I AM TALKING ABOUT ~/.src/github/LMMS" - frustrated that earlier session
+claimed files were identical when 7 files actually differed.
+
+Response: Found 7 files that differed between dirty branch and fork:
+1. TrackOperationsWidget.cpp - MISSING export/import pattern-tracks menu items
+2. TrackOperationsWidget.h - missing blank line
+3. Track.h - missing blank line
+4. Track.cpp - normalizeTrackNames in wrong position
+5. SongEditor.cpp - missing includes (cstdio, Track.h)
+6. PatternEditor.cpp - whitespace
+7. MainWindow.cpp - missing includes, extra comments
+
+Copied all 7 from ~/.src/github/LMMS/lmms to fork. Build successful.
+Previous session's "byte-for-byte identical" conclusion was WRONG.

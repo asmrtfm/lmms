@@ -1,0 +1,7 @@
+User: Recent changes regressed the automation track length fix in PatternStore::lengthOfPattern().
+Automation tracks were again being included in the max-length calculation, causing pattern tracks
+to over-extend when copy-to-new-pattern-track creates automation tracks.
+
+Fix: Re-applied the skip filter in PatternStore::lengthOfPattern() (src/core/PatternStore.cpp:95)
+to exclude Track::Type::Automation and Track::Type::HiddenAutomation from the length calculation.
+The "lmms-db checkpoint" commit (7153e98e1) had reverted this fix. All 8 tests pass.

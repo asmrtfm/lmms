@@ -128,6 +128,8 @@ private:
 
 	QScrollBar * m_leftRightScroll;
 
+	void adjustLeftRightScoll(int value);
+
 	LcdSpinBox * m_tempoSpinBox;
 
 	TimeLineWidget * m_timeLine;
@@ -195,6 +197,9 @@ protected slots:
 	void adjustUiAfterProjectLoad();
 
 	void updateSnapLabel();
+	void normalizePatternTrackNames();
+	void exportPatterns();
+	void importPatterns();
 
 signals:
 	void playTriggered();

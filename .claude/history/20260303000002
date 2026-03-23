@@ -1,0 +1,3 @@
+User: /mcp - lmms-mcp still not connecting ("no dice")
+
+Response: Found that `lmms-mcp` binary exists at `/home/me/.local/bin/lmms-mcp` but crashes on startup with `TypeError: FastMCP.__init__() got an unexpected keyword argument 'description'`. The installed `mcp` SDK v1.26.0 renamed the `description` parameter to `instructions`. Fixed by changing `description=` to `instructions=` in `mcp-lmms-sqlite/server.py:27`. Server now starts cleanly.

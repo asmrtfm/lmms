@@ -1,0 +1,24 @@
+TASK: Fix rubot model routing so music models are never auto-selected for pipeline operations
+
+STATUS: Code changes complete, needs user confirmation and testing
+
+FILES CHANGED (rubot project at /home/me/.src/github/asmrtfm/rubot/20260301/063437/rubot/):
+- src/rubot/constants.py: Added MUSIC_MODEL_PREFIXES after MusicModel enum
+- src/rubot/generation/ollama.py: Added _is_music_model(), _model_base_name(), filtered music models from resolve_chat_model() auto-detection
+
+FILES CHANGED (skills):
+- ~/.claude/skills/rubot/SKILL.md: Rewritten with correct 3-model architecture
+- ~/.claude/skills/auto-learn/SKILL.md: Updated model usage section
+
+CONTEXT:
+- User needs to install a general-purpose model (llama3, mistral, etc.) for pipeline features to work
+- Without a general model, entity extraction + summarization during ingest are gracefully disabled
+- Chunks and embeddings still work without a chat model
+- Music models remain available for explicit selection and for music operations (rubot music, build-knowledge enrichment)
+- The build-knowledge music enrichment step is important: it uses music models to create derived knowledge that maps technical LMMS docs to music theory understanding
+
+PENDING:
+- User hasn't confirmed the code changes yet
+- No tests run on rubot changes
+- User may want a general-purpose model installed (ollama pull llama3 or similar)
+- May need to update rubot MEMORY.md if one exists

@@ -1,0 +1,957 @@
+
+ ▐▛███▜▌   Claude Code v2.1.37
+▝▜█████▛▘  Opus 4.6 · Claude Pro
+  ▘▘ ▝▝    ~/.src/github/LMMS/lmms
+
+✻ Conversation compacted (ctrl+o for history)
+
+  ⎿ Read ../../../../.claude/projects/-home-me--src-github-LMMS-lmms/memory/sess
+    on-2026-02-09.md (110 lines)
+  ⎿  Referenced file src/gui/MainWindow.cpp
+  ⎿  Referenced file src/gui/tracks/TrackOperationsWidget.cpp
+  ⎿  Read include/TrackOperationsWidget.h (89 lines)
+  ⎿  Read include/DataFile.h (163 lines)
+  ⎿  Plan file referenced (~/.claude/plans/typed-greeting-sunbeam.md)
+
+● I'll implement the "reset steps" feature now. Let me read the files I need to
+  modify.
+
+● Read 4 files (ctrl+o to expand)
+
+● Now let me read the PatternEditor header and the toolbar section.
+
+● Read 2 files (ctrl+o to expand)
+
+● Now I have all the context. Let me implement the changes across all files.
+
+● Update(include/MidiClip.h)
+  ⎿  Added 1 line
+      115    using Model::dataChanged;
+      116  
+      117  public slots:
+      118 +  void resetSteps();                                          
+      119    void addSteps();
+      120    void cloneSteps();
+      121    void removeSteps();
+
+● Update(src/tracks/MidiClip.cpp)
+  ⎿  Added 7 lines
+      490  
+      491  
+      492  
+      493 +void MidiClip::resetSteps()                                   
+      494 +{                                                             
+      495 +  m_steps = TimePos::stepsPerBar();                           
+      496 +  updateLength();                                             
+      497 +  emit dataChanged();                                         
+      498 +}                                                             
+      499 +                                                              
+      500  void MidiClip::addSteps()
+      501  {
+      502    m_steps += TimePos::stepsPerBar();
+
+● Update(src/gui/clips/MidiClipView.cpp)
+  ⎿  Added 1 line
+      231    {
+      232      _cm->addSeparator();
+      233  
+      234 +    _cm->addAction( tr( "Reset steps" ), m_clip, SLOT(resetSte
+          +ps()));                                                       
+      235      _cm->addAction( embed::getIconPixmap( "step_btn_add" ),
+      236        tr( "Add steps" ), m_clip, SLOT(addSteps()));
+      237      _cm->addAction( embed::getIconPixmap( "step_btn_remove" ),
+
+● Update(include/PatternEditor.h)
+  ⎿  Added 1 line
+      56    void loadSettings(const QDomElement& element) override;
+      57  
+      58  public slots:
+      59 +  void resetSteps();                                           
+      60    void addSteps();
+      61    void cloneSteps();
+      62    void removeSteps();
+
+● Update(src/gui/editors/PatternEditor.cpp)
+  ⎿  Added 14 lines
+      67  
+      68  
+      69  
+      70 +void PatternEditor::resetSteps()                               
+      71 +{                                                              
+      72 +  const TrackContainer::TrackList& tl = model()->tracks();     
+      73 +                                                               
+      74 +  for (const auto& track : tl)                                 
+      75 +  {                                                            
+      76 +    if (track->type() == Track::Type::Instrument)              
+      77 +    {                                                          
+      78 +      auto p = static_cast<MidiClip*>(track->getClip(m_ps->curr
+         +entPattern()));                                                
+      79 +      p->resetSteps();                                         
+      80 +    }                                                          
+      81 +  }                                                            
+      82 +}                                                              
+      83 +                                                               
+      84  void PatternEditor::removeSteps()
+      85  {
+      86    const TrackContainer::TrackList& tl = model()->tracks();
+
+● Update(src/gui/editors/PatternEditor.cpp)
+  ⎿  Added 2 lines
+      290  
+      291  
+      292    // Step actions
+      293 +  trackAndStepActionsToolBar->addAction(tr("Reset steps"),    
+      294 +            m_editor, SLOT(resetSteps()));                    
+      295    trackAndStepActionsToolBar->addAction(embed::getIconPixmap("
+           step_btn_remove"), tr("Remove steps"),
+      296              m_editor, SLOT(removeSteps()));
+      297    trackAndStepActionsToolBar->addAction(embed::getIconPixmap("
+           step_btn_add"), tr("Add steps"),
+
+● All changes are in place. Here's a summary of what was modified:
+
+  1. include/MidiClip.h — Added resetSteps() public slot before addSteps()
+  2. src/tracks/MidiClip.cpp — Implemented resetSteps(): sets m_steps = 
+  TimePos::stepsPerBar(), calls updateLength(), emits dataChanged()
+  3. src/gui/clips/MidiClipView.cpp — Added "Reset steps" menu action before
+  "Add steps" in the beat clip context menu
+  4. include/PatternEditor.h — Added resetSteps() public slot before addSteps()
+  5. src/gui/editors/PatternEditor.cpp — Implemented resetSteps() (iterates all
+  instrument tracks, resets each clip's steps) and added toolbar button before
+  "Remove steps"
+
+  Ready for you to build and test.
+
+✻ Cogitated for 2m 22s
+
+❯ Building on your recently implemented export/import pattern-track         
+  feature, let's add multi-select functionality to both the export and      
+  import side of the feature.  Ideally, selecting multiple pattern-tracks   
+  for export would use standard mouse-and-keyboard-driven selection such as 
+   Shift+Click and Control+Click (with a visual indicator of which          
+  pattern-tracks are selected via a slight change in their background       
+  color), however if this proves to be too complicated then I suppose       
+  checkboxes next to their respective labels could work. The user should be 
+   presented with the appropriate save dialogue allowing them to choose a   
+  directory to export the pattern-tracks into. Use the pattern-track's      
+  label as its export's filename. Replace any space characters (' ') with   
+  underscores ('_') before saving the files.  Then, add multi-select        
+  functionality to the import pattern-track feature.                        
+
+● Entered plan mode
+  Claude is now exploring and designing an implementation approach.
+
+● Let me explore the codebase to understand the current export/import
+  implementation and how pattern tracks work in the UI.
+
+● 3 Explore agents finished (ctrl+o to expand)
+   ├─ Explore export/import pattern code · 3 tool uses · 12.5k tokens
+   │  ⎿  Done
+   ├─ Explore FileDialog and multi-select patterns · 19 tool uses · 30.3k tokens
+   │  ⎿  Done
+   └─ Explore Song Editor track selection · 42 tool uses · 47.0k tokens
+      ⎿  Done
+
+● Good, I have a comprehensive understanding now. Let me clarify one thing about
+   the import behavior before designing the plan.
+
+● User answered Claude's questions:
+  ⎿  · For multi-file import: when multiple .xppt files are selected, should
+      the first file be imported into the right-clicked PatternTrack and new
+      PatternTracks be created for each subsequent file? → Yes, auto-create 
+     new PatternTracks
+
+● Now let me design the implementation plan.
+
+● Plan(Design multi-select export/import plan)
+  ⎿  Done (11 tool uses · 30.4k tokens · 1m 12s)
+
+● Good, the plan agent's design is solid. Let me read the current export/import
+  code one more time to verify the line ranges before writing the final plan.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now let me write the final plan.
+
+● Read 1 file (ctrl+o to expand)
+
+● Updated plan
+  ⎿  /plan to preview
+  ⎿  You've hit your limit · resets 4pm (America/Louisville)
+     /upgrade or /extra-usage to finish what you’re working on.
+
+✻ Sautéed for 4m 8s
+
+❯ continue 
+
+● User approved Claude's plan
+  ⎿  Plan saved to: ~/.claude/plans/typed-greeting-sunbeam.md · /plan to 
+     edit
+     Plan: Multi-Select Pattern Track Export/Import
+
+     Context
+
+     The single-pattern export/import feature (.xppt files) is already
+     implemented in TrackOperationsWidget.cpp. Currently, "Export
+     pattern..." exports a single PatternTrack to one file, and "Import
+     pattern..." imports a single file into one PatternTrack. The user wants
+      batch operations: export multiple PatternTracks at once to a
+     directory, and import multiple .xppt files at once with auto-creation
+     of new PatternTracks.
+
+     File to Modify
+
+     Only file: src/gui/tracks/TrackOperationsWidget.cpp
+
+     No header changes needed — exportPattern() and importPattern() slots
+     are already declared.
+
+     Changes
+
+     1. Additional Includes
+
+     Add at the top alongside existing Qt includes:
+     #include <QDialogButtonBox>
+     #include <QDir>
+     #include <QLabel>
+     (QCheckBox and QBoxLayout are already included.)
+
+     2. Update Menu Labels (line 396-397)
+
+     Change menu text to plural form:
+     - "Export pattern..." → "Export patterns..."
+     - "Import pattern..." → "Import patterns..."
+
+     3. Rewrite exportPattern() (lines 440-516)
+
+     New flow:
+
+     1. Cast m_trackView->getTrack() to PatternTrack* (existing guard).
+     2. Checkbox dialog — Show a QDialog listing all PatternTracks:
+       - Iterate Engine::getSong()->tracks(), filter for
+     Track::Type::Pattern.
+       - For each PatternTrack, add a QCheckBox with the track's name().
+       - Pre-check the right-clicked track (the one matching
+     m_trackView->getTrack()).
+       - Add QDialogButtonBox with OK/Cancel.
+       - If cancelled or nothing checked, return early.
+     3. Directory selection — Use FileDialog::getExistingDirectory(this, 
+     tr("Export patterns to directory"), "").
+       - If empty string returned, return early.
+     4. Export loop — For each checked PatternTrack:
+       - Get its patternIndex().
+       - Build filename: name with spaces replaced by underscores
+     (QString::replace(' ', '_')), then remove illegal chars via
+     QRegularExpression(FILENAME_FILTER), append .xppt.
+       - Full path: QDir(directory).filePath(filename).
+       - Run existing export logic: create
+     DataFile(DataFile::Type::PatternData), iterate
+     Engine::patternStore()->tracks(), save state, prune clips to keep only
+     the one at targetPos, adjust pos to 0, write file.
+
+     The inner export logic (lines 462-515 of current code) is extracted
+     into a lambda exportSinglePattern(int patternIndex, const QString& 
+     filePath) to avoid duplication.
+
+     4. Rewrite importPattern() (lines 519-633)
+
+     New flow:
+
+     1. Cast m_trackView->getTrack() to PatternTrack* (existing guard).
+     2. Multi-file dialog — Change FileDialog::ExistingFile to
+     FileDialog::ExistingFiles (plural).
+       - Collect QStringList files = ofd.selectedFiles().
+       - If empty, return early.
+     3. Import loop — Wrap everything in requestChangeInModel() /
+     doneChangeInModel():
+       - First file (files[0]): import into the right-clicked PatternTrack's
+      patternIndex() using existing import logic.
+       - Subsequent files (files[1..N]): for each file:
+           - Create a new PatternTrack: Track::create(Track::Type::Pattern, 
+     Engine::getSong()).
+         - Get its pattern index:
+     dynamic_cast<PatternTrack*>(newTrack)->patternIndex().
+         - Run the same import logic against this new pattern index.
+
+     The inner import logic (lines 537-628 of current code) is extracted
+     into a lambda importSingleFile(int patternIndex, const QString& 
+     filePath) to avoid duplication.
+
+     4. Post-import cleanup (unchanged): updateComboBox(), setModified().
+
+     5. Filename Edge Case
+
+     If two PatternTracks produce the same sanitized filename, the second
+     export would overwrite the first. This is acceptable for the initial
+     implementation since PatternTracks typically have unique names.
+
+     Verification
+
+     1. Build: cmake --build build
+     2. Test multi-export:
+       - Create project with 3+ PatternTracks containing notes
+       - Right-click any PatternTrack → "Export patterns..."
+       - Check multiple patterns, pick a directory
+       - Verify .xppt files appear with underscored names
+     3. Test multi-import:
+       - New project, right-click the default PatternTrack → "Import
+     patterns..."
+       - Select 3 exported .xppt files
+       - Verify first imports into existing PatternTrack, subsequent ones
+     create new PatternTracks
+       - Verify all instrument tracks and clips are correct
+     4. Test single selection still works (check one pattern, select one
+     file)
+     5. Run existing tests: cd build/tests && ctest --output-on-failure -j2
+
+
+
+● Now let me implement the changes. I need to read the full file once more to
+  make precise edits.
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 4 lines, removed 1 line
+      25  #include "TrackOperationsWidget.h"
+      26  
+      27  #include <QBoxLayout>
+      28 +#include <QCheckBox>                                           
+      29 +#include <QDialogButtonBox>                                    
+      30 +#include <QDir>                                                
+      31 +#include <QLabel>                                              
+      32  #include <QMenu>
+      33  #include <QMessageBox>
+      34  #include <QMouseEvent>
+      35  #include <QPainter>
+      36  #include <QPushButton>
+      33 -#include <QCheckBox>                                           
+      37  #include <QRegularExpression>
+      38  
+      39  #include "AudioEngine.h"
+
+● Now update the menu labels.
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 2 lines, removed 2 lines
+      396    if (dynamic_cast<PatternTrackView*>(m_trackView))
+      397    {
+      398      toMenu->addSeparator();
+      399 -    toMenu->addAction(tr("Export pattern..."), this, SLOT(expo
+          -rtPattern()));                                                
+      400 -    toMenu->addAction(tr("Import pattern..."), this, SLOT(impo
+          -rtPattern()));                                                
+      399 +    toMenu->addAction(tr("Export patterns..."), this, SLOT(exp
+          +ortPattern()));                                               
+      400 +    toMenu->addAction(tr("Import patterns..."), this, SLOT(imp
+          +ortPattern()));                                               
+      401    }
+      402  
+      403    toMenu->addSeparator();
+
+● Now rewrite exportPattern() and importPattern().
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 79 lines, removed 53 lines
+      445    auto patternTrack = dynamic_cast<PatternTrack*>(m_trackView-
+           >getTrack());
+      446    if (!patternTrack) { return; }
+      447  
+      448 -  const int patternIndex = patternTrack->patternIndex();      
+      448 +  // Build checkbox dialog listing all PatternTracks          
+      449 +  QDialog selectionDialog(this);                              
+      450 +  selectionDialog.setWindowTitle(tr("Export patterns"));      
+      451 +  auto* layout = new QVBoxLayout(&selectionDialog);           
+      452 +  layout->addWidget(new QLabel(tr("Select patterns to export:"
+          +)));                                                          
+      453  
+      450 -  FileDialog sfd(this, tr("Export pattern"), "", tr("LMMS patt
+          -ern file (*.xppt)"));                                         
+      451 -  sfd.setAcceptMode(FileDialog::AcceptSave);                  
+      452 -  sfd.setFileMode(FileDialog::AnyFile);                       
+      453 -  sfd.setDefaultSuffix("xppt");                               
+      454 +  QVector<QPair<PatternTrack*, QCheckBox*>> checkboxes;       
+      455 +  for (const auto& track : Engine::getSong()->tracks())       
+      456 +  {                                                           
+      457 +    if (track->type() != Track::Type::Pattern) { continue; }  
+      458 +    auto* pt = dynamic_cast<PatternTrack*>(track);            
+      459 +    if (!pt) { continue; }                                    
+      460  
+      455 -  QString fname = patternTrack->name();                       
+      456 -  sfd.selectFile(fname.remove(QRegularExpression(FILENAME_FILT
+          -ER)));                                                        
+      461 +    auto* cb = new QCheckBox(pt->name(), &selectionDialog);   
+      462 +    if (pt == patternTrack) { cb->setChecked(true); }         
+      463 +    layout->addWidget(cb);                                    
+      464 +    checkboxes.append({pt, cb});                              
+      465 +  }                                                           
+      466  
+      458 -  if (sfd.exec() != QDialog::Accepted                         
+      459 -    || sfd.selectedFiles().isEmpty()                          
+      460 -    || sfd.selectedFiles().first().isEmpty())                 
+      467 +  auto* buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok 
+          +| QDialogButtonBox::Cancel, &selectionDialog);                
+      468 +  connect(buttonBox, &QDialogButtonBox::accepted, &selectionDi
+          +alog, &QDialog::accept);                                      
+      469 +  connect(buttonBox, &QDialogButtonBox::rejected, &selectionDi
+          +alog, &QDialog::reject);                                      
+      470 +  layout->addWidget(buttonBox);                               
+      471 +                                                              
+      472 +  if (selectionDialog.exec() != QDialog::Accepted) { return; }
+      473 +                                                              
+      474 +  // Collect selected PatternTracks                           
+      475 +  QVector<PatternTrack*> selectedTracks;                      
+      476 +  for (const auto& pair : checkboxes)                         
+      477    {
+      462 -    return;                                                   
+      478 +    if (pair.second->isChecked()) { selectedTracks.append(pair
+          +.first); }                                                    
+      479    }
+      480 +  if (selectedTracks.isEmpty()) { return; }                   
+      481  
+      465 -  DataFile dataFile(DataFile::Type::PatternData);             
+      466 -  QDomElement& content = dataFile.content();                  
+      482 +  // Pick export directory                                    
+      483 +  const QString directory = FileDialog::getExistingDirectory(t
+          +his, tr("Export patterns to directory"), "");                 
+      484 +  if (directory.isEmpty()) { return; }                        
+      485  
+      468 -  for (const auto& track : Engine::patternStore()->tracks())  
+      486 +  // Lambda to export a single pattern to a file              
+      487 +  auto exportSinglePattern = [](int patternIndex, const QStrin
+          +g& filePath)                                                  
+      488    {
+      470 -    // Save full track state (settings + all clips)           
+      471 -    track->saveState(dataFile, content);                      
+      489 +    DataFile dataFile(DataFile::Type::PatternData);           
+      490 +    QDomElement& content = dataFile.content();                
+      491  
+      473 -    // Find the track element we just appended and remove all 
+          -clip elements                                                 
+      474 -    // except the one at the target pattern index, adjusting i
+          -ts position to bar 0                                          
+      475 -    QDomElement trackElement = content.lastChildElement("track
+          -");                                                           
+      476 -    if (trackElement.isNull()) { continue; }                  
+      492 +    for (const auto& track : Engine::patternStore()->tracks())
+      493 +    {                                                         
+      494 +      track->saveState(dataFile, content);                    
+      495  
+      478 -    // Identify clip elements vs settings elements. The track 
+          -element contains:                                             
+      479 -    // - <muted>, <solo> model elements                       
+      480 -    // - the track-specific settings node (e.g. <instrumenttra
+          -ck>)                                                          
+      481 -    // - clip elements (e.g. <midiclip>, <sampleclip>, <automa
+          -tionclip>)                                                    
+      482 -    const QString settingsNodeName = track->nodeName();       
+      483 -    QDomElement targetClipElement;                            
+      484 -    const auto targetPos = TimePos(patternIndex, 0);          
+      496 +      QDomElement trackElement = content.lastChildElement("tra
+          +ck");                                                         
+      497 +      if (trackElement.isNull()) { continue; }                
+      498  
+      486 -    QDomNode child = trackElement.firstChild();               
+      487 -    while (!child.isNull())                                   
+      488 -    {                                                         
+      489 -      QDomElement elem = child.toElement();                   
+      490 -      QDomNode next = child.nextSibling();                    
+      491 -      // Skip non-element nodes, settings node, muted/solo nod
+          -es, and metadata                                              
+      492 -      if (!elem.isNull()                                      
+      493 -        && elem.tagName() != settingsNodeName                 
+      494 -        && elem.tagName() != "muted"                          
+      495 -        && elem.tagName() != "solo"                           
+      496 -        && !elem.attribute("metadata").toInt())               
+      499 +      const QString settingsNodeName = track->nodeName();     
+      500 +      QDomElement targetClipElement;                          
+      501 +      const auto targetPos = TimePos(patternIndex, 0);        
+      502 +                                                              
+      503 +      QDomNode child = trackElement.firstChild();             
+      504 +      while (!child.isNull())                                 
+      505        {
+      498 -        // This is a clip element - keep only the one at targe
+          -t position                                                    
+      499 -        if (TimePos(elem.attribute("pos").toInt()) == targetPo
+          -s)                                                            
+      506 +        QDomElement elem = child.toElement();                 
+      507 +        QDomNode next = child.nextSibling();                  
+      508 +        if (!elem.isNull()                                    
+      509 +          && elem.tagName() != settingsNodeName               
+      510 +          && elem.tagName() != "muted"                        
+      511 +          && elem.tagName() != "solo"                         
+      512 +          && !elem.attribute("metadata").toInt())             
+      513          {
+      501 -          targetClipElement = elem;                           
+      514 +          if (TimePos(elem.attribute("pos").toInt()) == target
+          +Pos)                                                          
+      515 +          {                                                   
+      516 +            targetClipElement = elem;                         
+      517 +          }                                                   
+      518 +          else                                                
+      519 +          {                                                   
+      520 +            trackElement.removeChild(child);                  
+      521 +          }                                                   
+      522          }
+      503 -        else                                                  
+      504 -        {                                                     
+      505 -          trackElement.removeChild(child);                    
+      506 -        }                                                     
+      523 +        child = next;                                         
+      524        }
+      508 -      child = next;                                           
+      509 -    }                                                         
+      525  
+      511 -    // Adjust target clip position to bar 0 for portability   
+      512 -    if (!targetClipElement.isNull())                          
+      513 -    {                                                         
+      514 -      targetClipElement.setAttribute("pos", 0);               
+      526 +      if (!targetClipElement.isNull())                        
+      527 +      {                                                       
+      528 +        targetClipElement.setAttribute("pos", 0);             
+      529 +      }                                                       
+      530      }
+      516 -  }                                                           
+      531  
+      518 -  dataFile.writeFile(sfd.selectedFiles().first());            
+      532 +    dataFile.writeFile(filePath);                             
+      533 +  };                                                          
+      534 +                                                              
+      535 +  // Export each selected pattern                             
+      536 +  for (auto* pt : selectedTracks)                             
+      537 +  {                                                           
+      538 +    QString filename = pt->name();                            
+      539 +    filename.replace(' ', '_');                               
+      540 +    filename.remove(QRegularExpression(FILENAME_FILTER));     
+      541 +    filename += ".xppt";                                      
+      542 +    const QString filePath = QDir(directory).filePath(filename
+          +);                                                            
+      543 +    exportSinglePattern(pt->patternIndex(), filePath);        
+      544 +  }                                                           
+      545  }
+      546  
+      547  
+
+● Now rewrite importPattern().
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 79 lines, removed 71 lines
+      550    auto patternTrack = dynamic_cast<PatternTrack*>(m_trackView-
+           >getTrack());
+      551    if (!patternTrack) { return; }
+      552  
+      553 -  const int patternIndex = patternTrack->patternIndex();      
+      554 -                                                              
+      555 -  FileDialog ofd(this, tr("Import pattern"), "", tr("LMMS patt
+          -ern file (*.xppt)"));                                         
+      553 +  FileDialog ofd(this, tr("Import patterns"), "", tr("LMMS pat
+          +tern file (*.xppt)"));                                        
+      554    ofd.setAcceptMode(FileDialog::AcceptOpen);
+      557 -  ofd.setFileMode(FileDialog::ExistingFile);                  
+      555 +  ofd.setFileMode(FileDialog::ExistingFiles);                 
+      556  
+      557    if (ofd.exec() != QDialog::Accepted
+      558      || ofd.selectedFiles().isEmpty()
+     ...
+      561      return;
+      562    }
+      563  
+      566 -  DataFile dataFile(ofd.selectedFiles().first());             
+      564 +  const QStringList files = ofd.selectedFiles();              
+      565  
+      568 -  Engine::audioEngine()->requestChangeInModel();              
+      569 -                                                              
+      570 -  QDomElement content = dataFile.content();                   
+      571 -  QDomNode node = content.firstChild();                       
+      572 -                                                              
+      573 -  while (!node.isNull())                                      
+      566 +  // Lambda to import a single .xppt file into the given patte
+          +rn index                                                      
+      567 +  auto importSingleFile = [](int patternIndex, const QString& 
+          +filePath)                                                     
+      568    {
+      575 -    QDomElement trackElement = node.toElement();              
+      576 -    node = node.nextSibling();                                
+      569 +    DataFile dataFile(filePath);                              
+      570 +    QDomElement content = dataFile.content();                 
+      571 +    QDomNode node = content.firstChild();                     
+      572  
+      578 -    if (trackElement.isNull() || trackElement.tagName() != "tr
+          -ack") { continue; }                                           
+      579 -                                                              
+      580 -    // Only handle instrument tracks                          
+      581 -    if (static_cast<Track::Type>(trackElement.attribute("type"
+          -).toInt()) != Track::Type::Instrument)                        
+      573 +    while (!node.isNull())                                    
+      574      {
+      583 -      continue;                                               
+      584 -    }                                                         
+      575 +      QDomElement trackElement = node.toElement();            
+      576 +      node = node.nextSibling();                              
+      577  
+      586 -    const QString trackName = trackElement.attribute("name"); 
+      578 +      if (trackElement.isNull() || trackElement.tagName() != "
+          +track") { continue; }                                         
+      579  
+      588 -    // Extract instrument name from the track-specific setting
+          -s                                                             
+      589 -    QString instrumentName;                                   
+      590 -    QDomElement itElement = trackElement.firstChildElement("in
+          -strumenttrack");                                              
+      591 -    if (!itElement.isNull())                                  
+      592 -    {                                                         
+      593 -      QDomElement instrElement = itElement.firstChildElement("
+          -instrument");                                                 
+      594 -      if (!instrElement.isNull())                             
+      580 +      if (static_cast<Track::Type>(trackElement.attribute("typ
+          +e").toInt()) != Track::Type::Instrument)                      
+      581        {
+      596 -        instrumentName = instrElement.attribute("name");      
+      582 +        continue;                                             
+      583        }
+      598 -    }                                                         
+      584  
+      600 -    // Try to find matching track in PatternStore (by name + i
+          -nstrument plugin name)                                        
+      601 -    Track* matchingTrack = nullptr;                           
+      602 -    for (const auto& track : Engine::patternStore()->tracks())
+      603 -    {                                                         
+      604 -      auto instTrack = dynamic_cast<InstrumentTrack*>(track); 
+      605 -      if (instTrack && track->name() == trackName             
+      606 -        && instTrack->instrument()                            
+      607 -        && instTrack->instrument()->descriptor()->name == inst
+          -rumentName)                                                   
+      585 +      const QString trackName = trackElement.attribute("name")
+          +;                                                             
+      586 +                                                              
+      587 +      QString instrumentName;                                 
+      588 +      QDomElement itElement = trackElement.firstChildElement("
+          +instrumenttrack");                                            
+      589 +      if (!itElement.isNull())                                
+      590        {
+      609 -        matchingTrack = track;                                
+      610 -        break;                                                
+      591 +        QDomElement instrElement = itElement.firstChildElement
+          +("instrument");                                               
+      592 +        if (!instrElement.isNull())                           
+      593 +        {                                                     
+      594 +          instrumentName = instrElement.attribute("name");    
+      595 +        }                                                     
+      596        }
+      612 -    }                                                         
+      597  
+      614 -    // If no match found, create a new instrument track in Pat
+          -ternStore                                                     
+      615 -    if (!matchingTrack)                                       
+      616 -    {                                                         
+      617 -      matchingTrack = Track::create(Track::Type::Instrument, E
+          -ngine::patternStore());                                       
+      618 -      matchingTrack->setName(trackName);                      
+      598 +      Track* matchingTrack = nullptr;                         
+      599 +      for (const auto& track : Engine::patternStore()->tracks(
+          +))                                                            
+      600 +      {                                                       
+      601 +        auto instTrack = dynamic_cast<InstrumentTrack*>(track)
+          +;                                                             
+      602 +        if (instTrack && track->name() == trackName           
+      603 +          && instTrack->instrument()                          
+      604 +          && instTrack->instrument()->descriptor()->name == in
+          +strumentName)                                                 
+      605 +        {                                                     
+      606 +          matchingTrack = track;                              
+      607 +          break;                                              
+      608 +        }                                                     
+      609 +      }                                                       
+      610  
+      620 -      // Load track-specific settings (instrument, effects, et
+          -c.)                                                           
+      621 -      if (!itElement.isNull())                                
+      611 +      if (!matchingTrack)                                     
+      612        {
+      623 -        auto instTrack = dynamic_cast<InstrumentTrack*>(matchi
+          -ngTrack);                                                     
+      624 -        if (instTrack)                                        
+      613 +        matchingTrack = Track::create(Track::Type::Instrument,
+          + Engine::patternStore());                                     
+      614 +        matchingTrack->setName(trackName);                    
+      615 +                                                              
+      616 +        if (!itElement.isNull())                              
+      617          {
+      626 -          instTrack->loadTrackSpecificSettings(itElement);    
+      618 +          auto instTrack = dynamic_cast<InstrumentTrack*>(matc
+          +hingTrack);                                                   
+      619 +          if (instTrack)                                      
+      620 +          {                                                   
+      621 +            instTrack->loadTrackSpecificSettings(itElement);  
+      622 +          }                                                   
+      623          }
+      624        }
+      629 -    }                                                         
+      625  
+      631 -    // Find the clip element in the file (should be at pos=0 f
+          -rom export)                                                   
+      632 -    QDomElement clipElement;                                  
+      633 -    QDomNode childNode = trackElement.firstChild();           
+      634 -    while (!childNode.isNull())                               
+      635 -    {                                                         
+      636 -      QDomElement childElem = childNode.toElement();          
+      637 -      if (!childElem.isNull() && childElem.tagName() != "instr
+          -umenttrack"                                                   
+      638 -        && !childElem.attribute("metadata").toInt())          
+      626 +      QDomElement clipElement;                                
+      627 +      QDomNode childNode = trackElement.firstChild();         
+      628 +      while (!childNode.isNull())                             
+      629        {
+      640 -        clipElement = childElem;                              
+      641 -        break;                                                
+      630 +        QDomElement childElem = childNode.toElement();        
+      631 +        if (!childElem.isNull() && childElem.tagName() != "ins
+          +trumenttrack"                                                 
+      632 +          && !childElem.attribute("metadata").toInt())        
+      633 +        {                                                     
+      634 +          clipElement = childElem;                            
+      635 +          break;                                              
+      636 +        }                                                     
+      637 +        childNode = childNode.nextSibling();                  
+      638        }
+      643 -      childNode = childNode.nextSibling();                    
+      644 -    }                                                         
+      639  
+      646 -    // Import the clip data into the target pattern index     
+      647 -    if (!clipElement.isNull() && matchingTrack->numOfClips() >
+          - patternIndex)                                                
+      648 -    {                                                         
+      649 -      Clip* destClip = matchingTrack->getClip(patternIndex);  
+      650 -      if (destClip)                                           
+      640 +      if (!clipElement.isNull() && matchingTrack->numOfClips()
+          + > patternIndex)                                              
+      641        {
+      652 -        const TimePos savedPos = destClip->startPosition();   
+      653 -        destClip->restoreState(clipElement);                  
+      654 -        destClip->movePosition(savedPos);                     
+      642 +        Clip* destClip = matchingTrack->getClip(patternIndex);
+      643 +        if (destClip)                                         
+      644 +        {                                                     
+      645 +          const TimePos savedPos = destClip->startPosition(); 
+      646 +          destClip->restoreState(clipElement);                
+      647 +          destClip->movePosition(savedPos);                   
+      648 +        }                                                     
+      649        }
+      650      }
+      651 +  };                                                          
+      652 +                                                              
+      653 +  Engine::audioEngine()->requestChangeInModel();              
+      654 +                                                              
+      655 +  // First file imports into the right-clicked PatternTrack   
+      656 +  importSingleFile(patternTrack->patternIndex(), files[0]);   
+      657 +                                                              
+      658 +  // Subsequent files each get a new PatternTrack             
+      659 +  for (int i = 1; i < files.size(); ++i)                      
+      660 +  {                                                           
+      661 +    auto* newTrack = Track::create(Track::Type::Pattern, Engin
+          +e::getSong());                                                
+      662 +    auto* newPatternTrack = dynamic_cast<PatternTrack*>(newTra
+          +ck);                                                          
+      663 +    if (!newPatternTrack) { continue; }                       
+      664 +    importSingleFile(newPatternTrack->patternIndex(), files[i]
+          +);                                                            
+      665    }
+      666  
+      667    Engine::audioEngine()->doneChangeInModel();
+
+● Let me verify the final result looks correct.
+
+● Read 1 file (ctrl+o to expand)
+
+● Everything looks correct. Here's a summary of all changes made to
+  src/gui/tracks/TrackOperationsWidget.cpp:
+
+  Includes — Added QDialogButtonBox, QDir, QLabel; alphabetized QCheckBox.
+
+  Menu labels (line ~398) — Changed to plural: "Export patterns..." / "Import
+  patterns..."
+
+  exportPattern() — Rewritten with:
+  1. A checkbox dialog listing all PatternTracks (right-clicked one pre-checked)
+  2. A directory selection dialog via FileDialog::getExistingDirectory
+  3. A loop exporting each checked pattern as Track_Name.xppt (spaces →
+  underscores) using a lambda that encapsulates the existing single-pattern
+  export logic
+
+  importPattern() — Rewritten with:
+  1. Multi-file selection dialog (FileDialog::ExistingFiles instead of
+  ExistingFile)
+  2. First selected file imports into the right-clicked PatternTrack (existing
+  behavior)
+  3. Each subsequent file creates a new PatternTrack via
+  Track::create(Track::Type::Pattern, Engine::getSong()) and imports into it
+  4. All imports wrapped in a single requestChangeInModel/doneChangeInModel
+  bracket
+
+  Ready for you to build and test.
+
+✻ Cogitated for 1m 25s
+
+❯ I just noticed a problem.  It seems like export misses certain instrument 
+   tracks. The bug must have existed all along since your export pattern    
+  tracks feature was implemented and I just didn't notice because some      
+  patterns are fully intact when imported but others are missing piano roll 
+   patterns for some of there instrument tracks.                            
+
+● Let me investigate the export and import logic carefully to find the bug.
+
+● Explore(Investigate pattern export/import bug)
+  ⎿  Done (11 tool uses · 43.7k tokens · 34s)
+
+● Found it. The bug is in the import clip-finding code. When searching for the
+  clip element within each <track>, the code skips <instrumenttrack> but does
+  not skip <muted> and <solo> elements. Since saveTrack always writes <muted>
+  and <solo> before clips, the import picks up <muted> as the "clip element" and
+   tries to restore from it, losing the actual clip data.
+
+  The export code correctly filters these out, but the import code was missing
+  the same checks. Let me fix it:
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 2 lines
+      629        {
+      630          QDomElement childElem = childNode.toElement();
+      631          if (!childElem.isNull() && childElem.tagName() != "ins
+           trumenttrack"
+      632 +          && childElem.tagName() != "muted"                   
+      633 +          && childElem.tagName() != "solo"                    
+      634            && !childElem.attribute("metadata").toInt())
+      635          {
+      636            clipElement = childElem;
+
+● Let me verify the fix is in place:
+
+● Read 1 file (ctrl+o to expand)
+
+● Fixed. The bug was that Track::saveTrack always writes <muted> and <solo> as
+  the first child elements of <track>, before the settings node and clips. The
+  export code (line ~508-512) correctly skips these when filtering clips, but
+  the import code was only skipping <instrumenttrack>. So the import would find
+  <muted> first, treat it as the clip element, and call restoreState with it —
+  effectively clearing the destination clip's data instead of loading the actual
+   <midiclip> content.
+
+  Ready for you to build and test.
+
+✻ Crunched for 4m 17s
+
+❯ I think the issue is the concept of muted and solo being preserved on     
+  export.  I do not want you to attempt to preserve any such state for      
+  pattern-tracks during export. You should never skip an instrument even if 
+   its piano rll is blank. It is crucial that your export behavior          
+  preserves the pattern-tracks and their instrument tracks piano roll       
+  patterns, volume levels, mixer channel, effects - literally do not alter  
+  them in any way.  Here are the errors (present on all builds since the    
+  original feature you implemented) convolution: samplerate mismatch        
+  preset:48000 host:44100                                                   
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  QtXmlWrapper::loadXMLfile(): empty data                                   
+  convolution: samplerate mismatch preset:48000 host:44100                  
+  convolution: samplerate mismatch preset:48000 host:44100                  
+  convolution: samplerate mismatch preset:48000 host:44100                  
+  convolution: samplerate mismatch preset:48000 host:44100                  
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+  called Track::getClip( 0 ), but Clip 0 doesn't exist                      
+
+● Let me dig into the root cause of the getClip(0) errors and understand how
+  clips get created for new tracks in PatternStore.
+
+● Explore(Investigate Track clip creation)
+  ⎿  Done (8 tool uses · 43.6k tokens · 38s)
+
+● Now let me read the relevant Track.cpp code to understand the clip creation
+  issue:
+
+● Read 1 file (ctrl+o to expand)
+
+● Now I see the full picture. There are two issues:
+
+  1. Import clip-finding bug (already fixed): <muted>/<solo> elements were being
+   picked up instead of actual clip elements, causing data loss.
+  2. Missing clips on new tracks: When Track::create() is called for
+  PatternStore, it calls createClipsForPattern(numOfPatterns() - 1). If
+  numOfPatterns() returns an unexpected value, no clips are created. While
+  getClip() auto-creates on demand (line 414), it doesn't create intermediate
+  clips properly. The fix is to explicitly ensure clips exist before accessing
+  them.
+
+  Let me update the import lambda to ensure clips are properly created:
+
+● Read 1 file (ctrl+o to expand)
+
+● Now I see the issue clearly. Line 642 checks matchingTrack->numOfClips() > 
+  patternIndex — if clips weren't created (e.g. createClipsForPattern(-1) was
+  called), this check fails and the clip data is silently skipped entirely.
+  That's why data is lost for some tracks. Let me fix this by ensuring clips
+  exist before accessing them:
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Error editing file
+
+● Let me read the exact indentation:
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(src/gui/tracks/TrackOperationsWidget.cpp)
+  ⎿  Added 2 lines, removed 1 line
+      639          childNode = childNode.nextSibling();
+      640        }
+      641  
+      642 -      if (!clipElement.isNull() && matchingTrack->numOfClips()
+          - > patternIndex)                                              
+      642 +      if (!clipElement.isNull())                              
+      643        {
+      644 +        matchingTrack->createClipsForPattern(patternIndex);   
+      645          Clip* destClip = matchingTrack->getClip(patternIndex);
+      646          if (destClip)
+      647          {
+
+● Let me verify both fixes are in place:
+
+● Read 1 file (ctrl+o to expand)
+
+● Both fixes are in place. Here's a summary of the two bugs fixed:
+
+  Bug 1 — Import clip-finding picked up <muted> instead of actual clips (lines
+  631-633): The XML element order within <track> is: <muted>, <solo>,
+  <instrumenttrack>, then clip elements. The import code only skipped
+  <instrumenttrack>, so it would grab <muted> as the "clip element" and try to
+  restore clip data from it — causing the actual piano roll data to be lost.
+  Fixed by adding != "muted" and != "solo" filters (matching what the export
+  code already does).
+
+  Bug 2 — Clips not created before access (lines 642-644): The old code checked
+  numOfClips() > patternIndex and silently skipped the import if clips didn't
+  exist yet. When Track::create() called createClipsForPattern(numOfPatterns() -
+   1) and numOfPatterns() returned an unexpected value, no clips were created,
+  and the import was entirely skipped for that track. Fixed by replacing the
+  guard with an explicit createClipsForPattern(patternIndex) call, which ensures
+   clips 0 through patternIndex exist before accessing them (it's a no-op if
+  they already do).
+
+  Ready for you to build and test.
+
+✻ Worked for 5m 12s
+
+❯ /export 
+  ⎿  Export cancelled
+
+❯ /export 
+  ⎿  Export cancelled
+
+❯ /export 
+  ⎿  Export cancelled

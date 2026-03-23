@@ -94,6 +94,14 @@ bar_t PatternStore::lengthOfPattern(int pattern) const
 	const TrackList & tl = tracks();
 	for (Track * t : tl)
 	{
+		// Automation tracks must never influence pattern length — they conform
+		// to the length defined by instrument and sample tracks
+		if (t->type() == Track::Type::Automation
+			|| t->type() == Track::Type::HiddenAutomation)
+		{
+			continue;
+		}
+
 		// Don't create Clips here if they don't exist
 		if (pattern < t->numOfClips())
 		{

@@ -1,0 +1,527 @@
+
+ ▐▛███▜▌   Claude Code v2.1.53
+▝▜█████▛▘  Opus 4.6 · Claude Pro
+  ▘▘ ▝▝    ~/.src/github/LMMS/lmms
+
+❯ build a CODEMAP for the project 
+
+● I'll explore the codebase structure in parallel to build a comprehensive
+  CODEMAP.
+
+● Searched for 3 patterns, read 1 file (ctrl+o to expand)
+
+● 4 Explore agents launched (ctrl+o to expand)
+   ├─ Map src/core directory
+   │  ⎿  Running in the background (↓ to manage)
+   ├─ Map src/gui directory
+   │  ⎿  Running in the background (↓ to manage)
+   ├─ Map include and tracks dirs
+   │  ⎿  Running in the background (↓ to manage)
+   └─ Map tests, cmake, tools dirs
+      ⎿  Running in the background (↓ to manage)
+
+● I've launched 4 parallel agents to explore different parts of the codebase.
+  I'll compile the CODEMAP once they all complete.
+
+● Task Output aac1e97928c1da449
+  ⎿  Read output (ctrl+o to expand)
+
+● Agent "Map include and tracks dirs" completed
+
+● Agent "Map tests, cmake, tools dirs" completed
+
+● Agent "Map src/gui directory" completed
+
+● Agent "Map src/core directory" completed
+
+● All 4 agents have completed. Now let me get file counts for a summary and
+  write the CODEMAP.
+
+● Bash(echo "=== File counts ===" && echo -n "Headers: " && find
+      /home/me/.src/github/LMMS/lmms/include -name "*.h" | wc -l && echo -n
+      "src/core .cpp: " && find /home/…)
+  ⎿  === File counts ===
+     Headers: 308
+     src/core .cpp: 129
+     … +5 lines (ctrl+o to expand)
+
+● Write(CODEMAP.md)
+  ⎿  Wrote 589 lines to CODEMAP.md
+       1 # LMMS CODEMAP
+       2 
+       3 **~128K lines of C++17/Qt5** | 308 headers | 258 source files | 
+         56 plugins
+       4 
+       5 ## Top-Level Layout
+       6 
+       7 ```
+       8 CMakeLists.txt          Root build config
+       9 include/                All public headers (flat directory, 308 
+         .h files)
+      10 src/
+     … +579 lines (ctrl+o to expand)
+
+● Done. I've written CODEMAP.md at the project root. It covers:
+
+  - Top-level layout with file counts
+  - Architecture overview (Model-View, audio pipeline, singletons)
+  - src/core/ — all 129 files grouped into 22 functional areas (engine, audio
+  backends, mixing, samples, synthesis, instruments, effects, playback, clips,
+  automation, tracks, models, plugins, LADSPA, LV2, MIDI, music theory, timing,
+  serialization, utilities)
+  - src/gui/ — all 121 files across 7 subdirectories (editors, clips, tracks,
+  instrument views, dialogs, menus, widgets)
+  - src/tracks/ — the 5 track type implementations
+  - plugins/ — all 57 plugins classified as instrument/effect/import-export/tool
+  - tests/ — 6 unit tests
+  - cmake/ — build modules and platform packaging
+  - tools/ — Python conversion utilities
+  - Key relationships — ASCII diagram of Song→Track→Clip hierarchy, AudioEngine
+  pipeline, Plugin system
+  - Data flow diagrams for note playback and project save/load
+
+✻ Sautéed for 4m 13s
+
+❯ I've noticed that when I play a pattern-track and open one of its         
+  instrument-track's patterns for editing in the piano roll, the play-head  
+  is not active. Forgive me if I am using the wrong term, but when I say    
+  "play-head", I am refering to the the cursor-like thing that visually     
+  indicates the currently playing position in real time. Make it work when  
+  its parent pattern-track is being played.                                 
+
+● Let me investigate how the piano roll playhead works and how pattern track
+  playback relates to it.
+
+● Explore(Piano roll playhead mechanism)
+  ⎿  Done (41 tool uses · 65.7k tokens · 1m 42s)
+  (ctrl+o to expand)
+
+● Excellent. Now I understand the core issue. The piano roll's TimeLineWidget is
+   created with Song::PlayMode::MidiClip, so it only shows the playhead when the
+   song is in MidiClip play mode. When you play a pattern track (which uses
+  Song::PlayMode::Song or Song::PlayMode::Pattern), the piano roll ignores that
+  position entirely.
+
+  Let me look at the specific code to understand exactly what needs to change.
+
+● Read 2 files (ctrl+o to expand)
+
+● Now let me understand how Song play mode updates positions and how pattern
+  tracks play back, and what the MidiClip associated with this piano roll would
+  look like during pattern playback.
+
+● Searched for 2 patterns, read 3 files (ctrl+o to expand)
+
+● Now let me understand how pattern track playback works. When playing in
+  PlayMode::Pattern, it plays a single PatternTrack which contains
+  InstrumentTracks' MidiClips. The playback position is tracked in
+  m_playPos[PlayMode::Pattern]. The piano roll only watches
+  m_playPos[PlayMode::MidiClip].
+
+  Let me see what information is available to compute the correct position
+  within a MidiClip during pattern playback.
+
+● Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Now I have a clear picture. Let me also check how the piano roll gets its
+  MidiClip reference and the pattern index.
+
+● Searched for 3 patterns (ctrl+o to expand)
+
+● Now I have the full picture. Let me understand the relationship: when the
+  piano roll opens a MidiClip from a PatternStore InstrumentTrack, the clip
+  index corresponds to the pattern number. During PlayMode::Pattern, the play
+  position loops within that pattern.
+
+  The key insight: the MidiClip's position within the track tells us its pattern
+   index (via getClipNum), and during pattern playback,
+  PatternStore::currentPattern() tells us which pattern is playing. If they
+  match, the play position from PlayMode::Pattern directly applies to the piano
+  roll content.
+
+  Let me check how updatePosition is triggered - specifically the 60fps timer
+  connection chain.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now I have the complete picture. The piano roll's TimeLineWidget holds a
+  reference to Song::PlayPos[PlayMode::MidiClip], and every 60fps it emits
+  positionChanged(m_pos) which triggers PianoRoll::updatePosition(). But during
+  pattern playback, it's PlayPos[PlayMode::Pattern] that gets updated, not
+  PlayPos[PlayMode::MidiClip].
+
+  The approach: In PianoRoll::updatePosition(), when the song is playing in
+  PlayMode::Pattern (or PlayMode::Song), and the currently-open MidiClip belongs
+   to the currently-playing pattern, mirror the pattern play position into the
+  piano roll's position line.
+
+  Let me check one more thing - how to determine if the open MidiClip's pattern
+  is the one currently playing.
+
+● Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Let me see the play() method and how the piano roll checks if it's a
+  PatternStore clip.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now I see desiredPlayModeForAccompany() already has logic to detect
+  PatternStore clips. And there's already a commented-out TODO at line 296-299
+  for exactly this feature.
+
+  Now let me check PositionLine::paintEvent to see the gradient condition:
+
+● Read 1 file (ctrl+o to expand)
+
+● I also notice that PositionLine::paintEvent at line 67-68 only shows the
+  gradient for Song or MidiClip modes, not Pattern mode. That's another thing to
+   fix.
+
+  Now let me check the includes in PianoRoll.cpp and what's available.
+
+● Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● Now I have everything I need. Here's the plan:
+
+  1. PianoRoll::updatePosition() — When the song is playing in Pattern mode (or
+  Song mode), and the current MidiClip belongs to the actively-playing pattern,
+  compute the position within the clip from the song/pattern play position and
+  show the position line there.
+  2. PositionLine::paintEvent() — Add PlayMode::Pattern to the gradient
+  condition so the tail gradient renders properly.
+
+  Let me implement this.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now I need to understand: m_timeLine->pos() returns the MidiClip PlayPos
+  (which only updates during MidiClip play mode). For pattern/song mode, I need
+  to get the position from the song/pattern PlayPos and translate it to the
+  clip-local position.
+
+  Let me check how Song play mode tracks patterns — specifically, what position
+  value corresponds to the start of a pattern clip's content.
+
+● Read 1 file (ctrl+o to expand)
+
+● Good — during PlayMode::Pattern, the play position
+  (getPlayPos(PlayMode::Pattern)) runs from 0 to lengthOfCurrentPattern(), which
+   is exactly the position within the MidiClips of that pattern. The position
+  directly corresponds to the note positions within the MidiClip.
+
+  For PlayMode::Song, the play position is absolute in the song timeline, and
+  PatternClips have a startPosition() and startTimeOffset() — but for the
+  initial implementation, let me focus on PlayMode::Pattern since that's what
+  the user described ("play a pattern-track").
+
+  Now let me implement it. The cleanest approach is to add a periodic check in
+  PianoRoll::updatePosition() that also handles Pattern/Song play modes.
+
+● Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Now let me also check what getClipNum returns for PatternStore clips to
+  confirm the relationship.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● The clip index within the PatternStore InstrumentTrack corresponds to the
+  pattern number. During PlayMode::Pattern, PatternStore::currentPattern() tells
+   us which pattern is playing. If
+  m_midiClip->getTrack()->getClipNum(m_midiClip) == currentPattern(), then the
+  play position directly maps to the MidiClip content.
+
+  Now let me implement. I'll modify PianoRoll::updatePosition() to also handle
+  Pattern play mode, and fix PositionLine::paintEvent().
+
+● Update(src/gui/editors/PianoRoll.cpp)
+  ⎿  Added 41 lines, removed 5 lines
+      4491  
+      4492  void PianoRoll::updatePosition(const TimePos & t)
+      4493  {
+      4494 -  if ((Engine::getSong()->isPlaying()                        
+      4495 -      && Engine::getSong()->playMode() == Song::PlayMode::Mid
+           -iClip                                                        
+      4494 +  Song* song = Engine::getSong();                            
+      4495 +  const auto playMode = song->playMode();                    
+      4496 +  const bool isPlaying = song->isPlaying();                  
+      4497 +                                                             
+      4498 +  // Determine the effective playhead tick position within th
+           +is MidiClip.                                                 
+      4499 +  // In MidiClip play mode, the timeline's own position is us
+           +ed directly.                                                 
+      4500 +  // In Pattern play mode, if the currently-open MidiClip bel
+           +ongs to the                                                  
+      4501 +  // playing pattern, mirror the pattern play position into t
+           +he piano roll.                                               
+      4502 +  int effectiveTick = static_cast<int>(m_timeLine->pos());   
+      4503 +  bool showFromExternalPlayback = false;                     
+      4504 +                                                             
+      4505 +  if (isPlaying && playMode == Song::PlayMode::Pattern && has
+           +ValidMidiClip()                                              
+      4506 +    && m_midiClip->getTrack()->trackContainer() == Engine::pa
+           +tternStore())                                                
+      4507 +  {                                                          
+      4508 +    int clipIndex = m_midiClip->getTrack()->getClipNum(m_midi
+           +Clip);                                                       
+      4509 +    if (clipIndex == Engine::patternStore()->currentPattern()
+           +)                                                            
+      4510 +    {                                                        
+      4511 +      effectiveTick = song->getPlayPos(Song::PlayMode::Patter
+           +n).getTicks();                                               
+      4512 +      showFromExternalPlayback = true;                       
+      4513 +    }                                                        
+      4514 +  }                                                          
+      4515 +                                                             
+      4516 +  if ((isPlaying                                             
+      4517 +      && (playMode == Song::PlayMode::MidiClip || showFromExt
+           +ernalPlayback)                                               
+      4518        && m_timeLine->autoScroll() != TimeLineWidget::AutoScro
+            llState::Disabled
+      4519      ) || m_scrollBack)
+      4520    {
+      4499 -    autoScroll(t);                                           
+      4521 +    autoScroll(TimePos(effectiveTick));                      
+      4522    }
+      4523    // ticks relative to m_currentPosition
+      4524    // < 0 = outside viewport left
+      4525    // > width = outside viewport right
+      4504 -  const int pos = (static_cast<int>(m_timeLine->pos()) - m_cu
+           -rrentPosition) * m_ppb / TimePos::ticksPerBar();             
+      4526 +  const int pos = (effectiveTick - m_currentPosition) * m_ppb
+           + / TimePos::ticksPerBar();                                   
+      4527    // if pos is within visible range, show it
+      4506 -  if (pos >= 0 && pos <= width() - m_whiteKeyWidth)          
+      4528 +  if ((isPlaying || playMode == Song::PlayMode::None) && pos 
+           +>= 0 && pos <= width() - m_whiteKeyWidth)                    
+      4529    {
+      4530      m_positionLine->show();
+      4531      // adjust pos for piano keys width and self line width (a
+            lign to rightmost of line)
+      4532      m_positionLine->move(pos + m_whiteKeyWidth - (m_positionL
+            ine->width() - 1), keyAreaTop());
+      4533    }
+      4534 +  else if (!isPlaying && !showFromExternalPlayback)          
+      4535 +  {                                                          
+      4536 +    // Original behavior: hide when outside range            
+      4537 +    const int origPos = (static_cast<int>(m_timeLine->pos()) 
+           +- m_currentPosition) * m_ppb / TimePos::ticksPerBar();       
+      4538 +    if (origPos >= 0 && origPos <= width() - m_whiteKeyWidth)
+      4539 +    {                                                        
+      4540 +      m_positionLine->show();                                
+      4541 +      m_positionLine->move(origPos + m_whiteKeyWidth - (m_pos
+           +itionLine->width() - 1), keyAreaTop());                      
+      4542 +    }                                                        
+      4543 +    else                                                     
+      4544 +    {                                                        
+      4545 +      m_positionLine->hide();                                
+      4546 +    }                                                        
+      4547 +  }                                                          
+      4548    else
+      4549    {
+      4550      m_positionLine->hide();
+
+● Wait, I'm overcomplicating the show/hide logic. Let me simplify — the original
+   logic was straightforward: show if in viewport, hide otherwise. The only
+  thing that changes is what pos value we use and when we auto-scroll.
+
+● Update(src/gui/editors/PianoRoll.cpp)
+  ⎿  Added 6 lines, removed 20 lines
+      4492  void PianoRoll::updatePosition(const TimePos & t)
+      4493  {
+      4494    Song* song = Engine::getSong();
+      4495 -  const auto playMode = song->playMode();                    
+      4495 +  const auto mode = song->playMode();                        
+      4496    const bool isPlaying = song->isPlaying();
+      4497  
+      4498    // Determine the effective playhead tick position within th
+            is MidiClip.
+     ...
+      4500    // In Pattern play mode, if the currently-open MidiClip bel
+            ongs to the
+      4501    // playing pattern, mirror the pattern play position into t
+            he piano roll.
+      4502    int effectiveTick = static_cast<int>(m_timeLine->pos());
+      4503 -  bool showFromExternalPlayback = false;                     
+      4503 +  bool trackingPattern = false;                              
+      4504  
+      4505 -  if (isPlaying && playMode == Song::PlayMode::Pattern && has
+           -ValidMidiClip()                                              
+      4505 +  if (isPlaying && mode == Song::PlayMode::Pattern && hasVali
+           +dMidiClip()                                                  
+      4506      && m_midiClip->getTrack()->trackContainer() == Engine::pa
+            tternStore())
+      4507    {
+      4508      int clipIndex = m_midiClip->getTrack()->getClipNum(m_midi
+            Clip);
+      4509      if (clipIndex == Engine::patternStore()->currentPattern()
+            )
+      4510      {
+      4511        effectiveTick = song->getPlayPos(Song::PlayMode::Patter
+            n).getTicks();
+      4512 -      showFromExternalPlayback = true;                       
+      4512 +      trackingPattern = true;                                
+      4513      }
+      4514    }
+      4515  
+      4516    if ((isPlaying
+      4517 -      && (playMode == Song::PlayMode::MidiClip || showFromExt
+           -ernalPlayback)                                               
+      4517 +      && (mode == Song::PlayMode::MidiClip || trackingPattern
+           +)                                                            
+      4518        && m_timeLine->autoScroll() != TimeLineWidget::AutoScro
+            llState::Disabled
+      4519      ) || m_scrollBack)
+      4520    {
+     ...
+      4525    // > width = outside viewport right
+      4526    const int pos = (effectiveTick - m_currentPosition) * m_ppb
+             / TimePos::ticksPerBar();
+      4527    // if pos is within visible range, show it
+      4528 -  if ((isPlaying || playMode == Song::PlayMode::None) && pos 
+           ->= 0 && pos <= width() - m_whiteKeyWidth)                    
+      4528 +  if (pos >= 0 && pos <= width() - m_whiteKeyWidth)          
+      4529    {
+      4530      m_positionLine->show();
+      4531      // adjust pos for piano keys width and self line width (a
+            lign to rightmost of line)
+      4532      m_positionLine->move(pos + m_whiteKeyWidth - (m_positionL
+            ine->width() - 1), keyAreaTop());
+      4533    }
+      4534 -  else if (!isPlaying && !showFromExternalPlayback)          
+      4535 -  {                                                          
+      4536 -    // Original behavior: hide when outside range            
+      4537 -    const int origPos = (static_cast<int>(m_timeLine->pos()) 
+           -- m_currentPosition) * m_ppb / TimePos::ticksPerBar();       
+      4538 -    if (origPos >= 0 && origPos <= width() - m_whiteKeyWidth)
+      4539 -    {                                                        
+      4540 -      m_positionLine->show();                                
+      4541 -      m_positionLine->move(origPos + m_whiteKeyWidth - (m_pos
+           -itionLine->width() - 1), keyAreaTop());                      
+      4542 -    }                                                        
+      4543 -    else                                                     
+      4544 -    {                                                        
+      4545 -      m_positionLine->hide();                                
+      4546 -    }                                                        
+      4547 -  }                                                          
+      4534    else
+      4535    {
+      4536      m_positionLine->hide();
+
+● Now fix PositionLine::paintEvent() to also show the gradient trail during
+  PlayMode::Pattern:
+
+● Update(src/gui/editors/PositionLine.cpp)
+  ⎿  Added 2 lines, removed 1 line
+      65      if (m_hasTailGradient &&
+      66        Engine::getSong()->isPlaying() &&
+      67        (Engine::getSong()->playMode() == Song::PlayMode::Song ||
+      68 -       Engine::getSong()->playMode() == Song::PlayMode::MidiCli
+         -p))                                                            
+      68 +       Engine::getSong()->playMode() == Song::PlayMode::MidiCli
+         +p ||                                                           
+      69 +       Engine::getSong()->playMode() == Song::PlayMode::Pattern
+         +))                                                             
+      70      {
+      71        c.setAlpha(60);
+      72        gradient.setColorAt(w, c);
+
+● Now let me also remove the old TODO comment that was left for exactly this
+  feature:
+
+● Read 1 file (ctrl+o to expand)
+
+● Update(src/gui/editors/PianoRoll.cpp)
+  ⎿  Removed 5 lines
+      292  
+      293    // update timeline when in record-accompany mode
+      294    connect(m_timeLine, &TimeLineWidget::positionChanged, this, 
+           &PianoRoll::updatePositionAccompany);
+      295 -  // TODO                                                     
+      296 -/*   connect( engine::getSong()->getPlayPos( Song::PlayMode::Patt
+
+          -ern ).m_timeLine,                                             
+      297 -        SIGNAL( positionChanged( const lmms::TimePos& ) ),    
+      298 -      this,                                                   
+      299 -      SLOT( updatePositionAccompany( const lmms::TimePos& ) ) 
+          -);*/                                                          
+      295  
+      296    removeSelection();
+      297  
+
+● Now let me add the stderr logging as per user preferences:
+
+● Read 1 file (ctrl+o to expand)
+
+● Actually, the logging preference says to add logging to new feature code. But
+  this function is called 60 times per second — adding fprintf at 60fps would
+  flood stderr. I'll add a one-shot log when tracking starts/stops instead. Let
+  me check if there's a member I can use to detect the transition.
+
+  Actually, I'll just add a static bool to track the transition:
+
+● Update(src/gui/editors/PianoRoll.cpp)
+  ⎿  Added 12 lines
+      4508      }
+      4509    }
+      4510  
+      4511 +  static bool wasTrackingPattern = false;                    
+      4512 +  if (trackingPattern && !wasTrackingPattern)                
+      4513 +  {                                                          
+      4514 +    fprintf(stderr, "PianoRoll: tracking pattern playback pos
+           +ition (pattern %d)\n",                                       
+      4515 +      Engine::patternStore()->currentPattern());             
+      4516 +  }                                                          
+      4517 +  else if (!trackingPattern && wasTrackingPattern)           
+      4518 +  {                                                          
+      4519 +    fprintf(stderr, "PianoRoll: stopped tracking pattern play
+           +back position\n");                                           
+      4520 +  }                                                          
+      4521 +  wasTrackingPattern = trackingPattern;                      
+      4522 +                                                             
+      4523    if ((isPlaying
+      4524        && (mode == Song::PlayMode::MidiClip || trackingPattern
+            )
+      4525        && m_timeLine->autoScroll() != TimeLineWidget::AutoScro
+            llState::Disabled
+
+● Let me verify the final state of both changed files:
+
+● Read 2 files (ctrl+o to expand)
+
+● The changes look correct. Here's a summary of what was done:
+
+  Changes Made
+
+  src/gui/editors/PianoRoll.cpp — updatePosition()
+
+  Problem: The piano roll's playhead only tracked PlayPos[MidiClip], which is
+  only updated when you hit play from the piano roll itself. When playing a
+  pattern track from the Pattern Editor, the position lives in PlayPos[Pattern]
+  — so the piano roll's playhead sat idle.
+
+  Fix: When the song is playing in Pattern mode, and the currently-open MidiClip
+   belongs to the active pattern (i.e., it's in the PatternStore and its clip
+  index matches PatternStore::currentPattern()), the piano roll reads the play
+  position from PlayPos[Pattern] instead. This makes the playhead move in real
+  time, with auto-scroll working too.
+
+  Also removed a long-standing // TODO comment (lines 295-299) that was a dead
+  code attempt at exactly this feature.
+
+  src/gui/editors/PositionLine.cpp — paintEvent()
+
+  Added PlayMode::Pattern to the gradient tail condition, so the playhead line
+  renders with the proper trailing gradient during pattern playback (it
+  previously only rendered for Song and MidiClip modes).
+
+  How it works
+
+  1. updatePosition() is called 60fps by the TimeLineWidget timer
+  2. It checks: is the song playing in Pattern mode? Does the open MidiClip
+  belong to the currently-playing pattern?
+  3. If yes, it reads the tick position from Song::getPlayPos(PlayMode::Pattern)
+   instead of the MidiClip playpos
+  4. The rest of the logic (pixel calculation, auto-scroll, show/hide) proceeds
+  unchanged with this substituted tick value
+
+✻ Baked for 4m 41s

@@ -1,0 +1,48 @@
+## Task: Add Tagging System to Rubot
+
+### Status: COMPLETE (code deployed, background tasks running)
+
+### What Was Done
+1. Added `tags` ARRAY(Text) column to Document model (with GIN index) -- DONE
+2. Added denormalized `tags` ARRAY(Text) to ChunkRecord (with GIN index) -- DONE
+3. Created Alembic migration 004_add_tags.py -- DONE, migrated
+4. Added `--tag` option to `ingest` CLI command (repeatable) -- DONE
+5. Added `--tag` option to `query` CLI command (filter results) -- DONE
+6. Tags propagate from Document to ChunkRecord during ingest -- DONE
+7. Tag filtering in vector_search and keyword_search -- DONE
+8. Added `tag` subcommand group (list/add/remove) -- DONE
+9. Reinstalled rubot v0.2.0 -- DONE
+10. Tagged existing documents:
+    - lmms-docs: 19 docs (effects section so far, rest still ingesting)
+    - lmms-internal: 48 docs (plugin defaults, SQLite notes, track docs)
+    - rubot-docs: 10 docs (rubot's own documentation)
+    - music-reference: 1 doc (MIDI note reference)
+
+### Remaining Background Tasks
+- Ingest: 21/76 LMMS doc pages processed (running at ~1/min via Ollama)
+- Once ingest completes: tag remaining docs with `rubot tag add lmms-docs "%pattern%"`
+- Then run `rubot build-knowledge` to re-cluster with expanded knowledge base
+- qwen3:8b model pull in progress (better general-purpose model for RAG pipeline)
+
+### Files Modified
+- src/rubot/db/models.py - tags columns on Document and ChunkRecord
+- src/rubot/cli.py - --tag on ingest/query, tag list/add/remove subcommands
+- src/rubot/ingest/pipeline.py - tags param on ingest_file/ingest_files/ingest_text
+- src/rubot/retrieval/vector_search.py - tags filter
+- src/rubot/retrieval/keyword_search.py - tags filter
+- src/rubot/retrieval/pipeline.py - tags pass-through
+- alembic/versions/004_add_tags.py - migration
+
+### Usage Examples
+```bash
+# Ingest with tags
+rubot ingest --tag lmms-docs --tag effects *.md
+
+# Query filtered by tag
+rubot query -t lmms-docs "how does the compressor work?"
+
+# Manage tags
+rubot tag list
+rubot tag add lmms-docs "Effects /"
+rubot tag remove lmms-docs "Effects /"
+```

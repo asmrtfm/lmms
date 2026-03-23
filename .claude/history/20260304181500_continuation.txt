@@ -1,0 +1,20 @@
+User: Continue from where we left off (context window compacted).
+User follow-up: "I hope you aren't limiting your scope to bug fixes"
+
+Response: Performed exhaustive comparison of ALL source files between the dirty branch
+(/home/me/.src/github/LMMS/lmms) and the current fork. Results:
+- Zero C++ files differ
+- Zero SQL/CMake/QRC/UI files differ
+- Zero files missing from fork (except ./target/ install artifacts)
+- All 6 backups in ~/.src/github/LMMS/backups/ are OLDER versions with LESS code
+
+The Feb 17 23:59 backup (lmms_20260217235944) that appeared to have "uncommitted changes" was
+actually the OLDER version BEFORE the SQLite features, PianoRoll playhead tracking, track naming,
+etc. were added. The earlier analysis had the diff direction backwards.
+
+Conclusion: Nothing was lost. The bug was never fixed in any branch.
+
+Re-applied the 3 fixes from the plan:
+1. PatternClipView.cpp: Unmute after copyStateTo for SampleClips/AutomationClips
+2. PatternClipView.cpp: Replace broken addSteps() loop with type-aware length management
+3. PianoRoll.cpp: Defensive unmute and updateLength() after pasteNotes()

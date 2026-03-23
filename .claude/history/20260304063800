@@ -1,0 +1,3 @@
+USER: Thoroughly explore the rubot codebase at /home/me/.src/github/asmrtfm/rubot/20260301/063437/rubot/. I need to understand: 1. Full directory structure (src/rubot/*), 2. constants.py, 3. config.py, 4. generation/ollama.py, 5. mcp/server.py, 6. cli.py, 7. knowledge/ directory, 8. retrieval/pipeline.py. Read all files fully - need exact patterns to replicate.
+
+RESPONSE: Delivered complete exhaustive analysis of all files. Key patterns documented below in the response.

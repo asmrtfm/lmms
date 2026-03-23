@@ -79,6 +79,38 @@ namespace lmms::gui
 {
 
 // =========================================================================
+// Selective Clone Support
+// =========================================================================
+
+/**
+ * @brief Show or hide the selective clone checkbox on this widget.
+ *
+ * Called by PatternEditor when entering or leaving selective clone mode.
+ * The checkbox is unchecked each time it becomes visible so the user
+ * always starts with a clean (unselected) state.
+ *
+ * @param visible True to show the checkbox, false to hide it.
+ */
+void TrackOperationsWidget::setSelectiveCloneCheckboxVisible(bool visible)
+{
+	if (visible)
+	{
+		m_selectiveCloneCheckbox->setChecked(false); // Reset to unchecked every time selection mode starts
+	}
+	m_selectiveCloneCheckbox->setVisible(visible);
+}
+
+/**
+ * @brief Return whether this track is checked for inclusion in a selective clone.
+ * @return True if the checkbox is visible and checked; false otherwise.
+ */
+bool TrackOperationsWidget::isSelectedForSelectiveClone() const
+{
+	return m_selectiveCloneCheckbox->isVisible() && m_selectiveCloneCheckbox->isChecked();
+}
+
+
+// =========================================================================
 // Construction
 // =========================================================================
 
@@ -126,6 +158,13 @@ TrackOperationsWidget::TrackOperationsWidget( TrackView * parent ) :
 	auto operationsLayout = new QHBoxLayout(operationsWidget);
 	operationsLayout->setContentsMargins(0, 0, 0, 0); // No margins inside the operations area
 	operationsLayout->setSpacing(0);                   // No spacing between operations buttons
+
+	// Create the selective clone checkbox (hidden by default; shown by PatternEditor in selection mode).
+	// It is inserted first in the operations layout so it appears to the left of the gear button.
+	m_selectiveCloneCheckbox = new QCheckBox(operationsWidget);
+	m_selectiveCloneCheckbox->setToolTip(tr("Include this track in selective clone"));
+	m_selectiveCloneCheckbox->setVisible(false);
+	operationsLayout->addWidget(m_selectiveCloneCheckbox, 0, Qt::AlignVCenter);
 
 	// Create the gear button (QPushButton) that triggers the context menu when clicked
 	m_trackOps = new QPushButton(operationsWidget);
@@ -852,6 +891,124 @@ void TrackOperationsWidget::importPattern()
 
 		stripJournallingIDs(content);
 
+		// Build mixer channel remap table from exported <mixerchannels>
+		QMap<int, int> mixerChannelRemap; // old channel -> new channel
+		auto* mixer = Engine::mixer();
+		QDomElement mixerChannelsElem = content.firstChildElement("mixerchannels");
+		if (!mixerChannelsElem.isNull())
+		{
+			// First pass: create or reuse channels, build remap table
+			QDomElement chElem = mixerChannelsElem.firstChildElement("mixerchannel");
+			while (!chElem.isNull())
+			{
+				int origIdx = chElem.attribute("num", "0").toInt();
+				QString chName = chElem.attribute("name", "");
+				int destIdx = origIdx;
+
+				if (origIdx > 0 && origIdx < mixer->numChannels()
+					&& mixer->isChannelInUse(origIdx))
+				{
+					// Conflict: create a new channel
+					destIdx = mixer->createChannel();
+					fprintf(stderr, "[importPattern] Mixer channel %d in use, remapped to %d\n",
+						origIdx, destIdx);
+				}
+				else if (origIdx >= mixer->numChannels())
+				{
+					// Channel doesn't exist yet, create it
+					while (mixer->numChannels() <= origIdx)
+					{
+						mixer->createChannel();
+					}
+					destIdx = origIdx;
+				}
+
+				mixerChannelRemap.insert(origIdx, destIdx);
+
+				// Apply channel settings
+				if (destIdx > 0 && destIdx < mixer->numChannels())
+				{
+					MixerChannel* dest = mixer->mixerChannel(destIdx);
+					dest->m_name = chName;
+					if (chElem.hasAttribute("color"))
+					{
+						dest->setColor(QColor(chElem.attribute("color")));
+					}
+					dest->m_volumeModel.loadSettings(chElem, "volume");
+					dest->m_muteModel.loadSettings(chElem, "muted");
+					dest->m_soloModel.loadSettings(chElem, "soloed");
+
+					// Load effects chain
+					QDomElement fxChainElem = chElem.firstChildElement("fxchain");
+					if (!fxChainElem.isNull())
+					{
+						dest->m_fxChain.restoreState(fxChainElem);
+					}
+				}
+
+				chElem = chElem.nextSiblingElement("mixerchannel");
+			}
+
+			// Second pass: set up sends with remapped indices
+			chElem = mixerChannelsElem.firstChildElement("mixerchannel");
+			while (!chElem.isNull())
+			{
+				int origFrom = chElem.attribute("num", "0").toInt();
+				int remappedFrom = mixerChannelRemap.value(origFrom, origFrom);
+
+				QDomElement sendElem = chElem.firstChildElement("send");
+				while (!sendElem.isNull())
+				{
+					int origTo = sendElem.attribute("channel", "0").toInt();
+					int remappedTo = mixerChannelRemap.value(origTo, origTo);
+
+					if (remappedFrom > 0 && remappedTo >= 0
+						&& remappedFrom < mixer->numChannels()
+						&& remappedTo < mixer->numChannels())
+					{
+						MixerRoute* route = mixer->createChannelSend(
+							remappedFrom, remappedTo);
+						if (route)
+						{
+							route->amount()->loadSettings(sendElem, "amount");
+						}
+					}
+					sendElem = sendElem.nextSiblingElement("send");
+				}
+
+				chElem = chElem.nextSiblingElement("mixerchannel");
+			}
+		}
+
+		// Remap mixch attributes in the DOM before loading tracks
+		if (!mixerChannelRemap.isEmpty())
+		{
+			QDomNodeList itElements = content.elementsByTagName("instrumenttrack");
+			for (int j = 0; j < itElements.size(); ++j)
+			{
+				QDomElement itElem = itElements.at(j).toElement();
+				if (itElem.hasAttribute("mixch"))
+				{
+					int origCh = itElem.attribute("mixch").toInt();
+					int newCh = mixerChannelRemap.value(origCh, origCh);
+					if (newCh != origCh)
+					{
+						itElem.setAttribute("mixch", newCh);
+					}
+				}
+				// Also handle legacy "fxch" attribute
+				if (itElem.hasAttribute("fxch"))
+				{
+					int origCh = itElem.attribute("fxch").toInt();
+					int newCh = mixerChannelRemap.value(origCh, origCh);
+					if (newCh != origCh)
+					{
+						itElem.setAttribute("fxch", newCh);
+					}
+				}
+			}
+		}
+
 		static const QStringList clipTagNames = {"midiclip", "sampleclip", "automationclip", "patternclip"};
 
 		QVector<QDomElement> fileTrackElements;
@@ -867,23 +1024,56 @@ void TrackOperationsWidget::importPattern()
 			}
 		}
 
+		// Match imported tracks to existing tracks by instrument identity
+		// (plugin name + track label), not by positional index. This ensures
+		// clips go to the correct instrument regardless of track ordering.
 		const auto& existingTracks = Engine::patternStore()->tracks();
+
+		// Build a lookup of existing tracks keyed by (pluginName, trackLabel)
+		// for identity-based matching. Tracks that have already been matched
+		// are removed from candidates to prevent double-matching.
+		QMultiMap<QPair<QString, QString>, Track*> existingByIdentity;
+		for (auto* track : existingTracks)
+		{
+			if (track->type() != Track::Type::Instrument) { continue; }
+			auto* instTrack = dynamic_cast<InstrumentTrack*>(track);
+			if (!instTrack || !instTrack->instrument()) { continue; }
+			QString pluginName = instTrack->instrument()->descriptor()->name;
+			QString label = track->name();
+			existingByIdentity.insert(qMakePair(pluginName, label), track);
+		}
 
 		for (int i = 0; i < fileTrackElements.size(); ++i)
 		{
 			const QDomElement& trackElement = fileTrackElements[i];
 
-			Track* destTrack = nullptr;
-			if (i < static_cast<int>(existingTracks.size()))
+			// Extract instrument plugin name from the file's DOM
+			QString fileLabel = trackElement.attribute("name");
+			QDomElement itElement = trackElement.firstChildElement("instrumenttrack");
+			QString filePluginName;
+			if (!itElement.isNull())
 			{
-				destTrack = existingTracks[i];
+				QDomElement instElem = itElement.firstChildElement("instrument");
+				filePluginName = instElem.attribute("name");
+			}
+
+			// Try to find a matching existing track by identity
+			QPair<QString, QString> identity = qMakePair(filePluginName, fileLabel);
+			Track* destTrack = nullptr;
+			auto it = existingByIdentity.find(identity);
+			if (it != existingByIdentity.end())
+			{
+				destTrack = it.value();
+				existingByIdentity.erase(it); // consume match
+				fprintf(stderr, "[importPattern] Matched track '%s' (%s) to existing track\n",
+					fileLabel.toUtf8().constData(), filePluginName.toUtf8().constData());
 			}
 			else
 			{
+				// No match: create a new instrument track with full settings
 				destTrack = Track::create(Track::Type::Instrument, Engine::patternStore());
-				destTrack->setName(trackElement.attribute("name"));
+				destTrack->setName(fileLabel);
 
-				QDomElement itElement = trackElement.firstChildElement("instrumenttrack");
 				if (!itElement.isNull())
 				{
 					auto instTrack = dynamic_cast<InstrumentTrack*>(destTrack);
@@ -892,6 +1082,8 @@ void TrackOperationsWidget::importPattern()
 						instTrack->loadTrackSpecificSettings(itElement);
 					}
 				}
+				fprintf(stderr, "[importPattern] Created new track '%s' (%s)\n",
+					fileLabel.toUtf8().constData(), filePluginName.toUtf8().constData());
 			}
 
 			QDomElement clipElement;

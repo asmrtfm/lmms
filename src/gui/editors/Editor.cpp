@@ -31,6 +31,7 @@
 #include "embed.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QShortcut>
 #include <QCloseEvent>
 
@@ -142,9 +143,16 @@ QAction *Editor::playAction() const
 
 void Editor::closeEvent(QCloseEvent * event)
 {
-	if( parentWidget() )
+	// Allow the event during app shutdown so Qt can exit cleanly.
+	if (getGUI()->mainWindow()->isQuitting()) { event->accept(); return; }
+
+	QWidget* parent = parentWidget();
+	// In MDI mode the parent is a visible SubWindow — hide the wrapper.
+	// In multi-window mode the SubWindow wrapper is already hidden, so
+	// we hide ourselves instead (same net effect as MDI close).
+	if (parent && parent->isVisible())
 	{
-		parentWidget()->hide();
+		parent->hide();
 	}
 	else
 	{
@@ -152,7 +160,7 @@ void Editor::closeEvent(QCloseEvent * event)
 	}
 	getGUI()->mainWindow()->refocus();
 	event->ignore();
- }
+}
 
 DropToolBar::DropToolBar(QWidget* parent) : QToolBar(parent)
 {

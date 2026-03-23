@@ -24,6 +24,7 @@
 
 #include "MicrotunerConfig.h"
 
+#include <QApplication>
 #include <QFile>
 #include <QGridLayout>
 #include <QLabel>
@@ -682,8 +683,16 @@ void MicrotunerConfig::loadSettings(const QDomElement &element)
 
 void MicrotunerConfig::closeEvent(QCloseEvent *ce)
 {
-	if (parentWidget()) {parentWidget()->hide();}
-	else {hide();}
+	if (getGUI()->mainWindow()->isQuitting()) { ce->accept(); return; }
+	QWidget* parent = parentWidget();
+	if (parent && parent->isVisible())
+	{
+		parent->hide();
+	}
+	else
+	{
+		hide();
+	}
 	ce->ignore();
 }
 

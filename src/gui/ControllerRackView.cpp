@@ -231,17 +231,19 @@ void ControllerRackView::addController()
 
 
 void ControllerRackView::closeEvent( QCloseEvent * _ce )
- {
-	if( parentWidget() )
+{
+	if (getGUI()->mainWindow()->isQuitting()) { _ce->accept(); return; }
+	QWidget* parent = parentWidget();
+	if (parent && parent->isVisible())
 	{
-		parentWidget()->hide();
+		parent->hide();
 	}
 	else
 	{
 		hide();
 	}
 	_ce->ignore();
- }
+}
 
 
 } // namespace lmms::gui

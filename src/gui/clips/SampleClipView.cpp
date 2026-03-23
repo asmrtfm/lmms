@@ -29,6 +29,7 @@
 #include <QPainter>
 
 #include "GuiApplication.h"
+#include "MainWindow.h"
 #include "AutomationEditor.h"
 #include "embed.h"
 #include "PathUtil.h"
@@ -341,8 +342,7 @@ void SampleClipView::setAutomationGhost()
 {
 	auto aEditor = gui::getGUI()->automationEditor();
 	aEditor->setGhostSample(m_clip);
-	aEditor->parentWidget()->show();
-	aEditor->show();
+	gui::getGUI()->mainWindow()->toggleAutomationEditorWin(true); // forceShow — respects multi-window mode
 	aEditor->setFocus();
 }
 

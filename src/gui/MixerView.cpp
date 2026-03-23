@@ -23,6 +23,7 @@
  */
 
 
+#include <QApplication>
 #include <QLayout>
 #include <QPushButton>
 #include <QScrollArea>
@@ -524,17 +525,19 @@ void MixerView::keyPressEvent(QKeyEvent * e)
 
 
 void MixerView::closeEvent(QCloseEvent * ce)
- {
-	if (parentWidget())
+{
+	if (getGUI()->mainWindow()->isQuitting()) { ce->accept(); return; }
+	QWidget* parent = parentWidget();
+	if (parent && parent->isVisible())
 	{
-		parentWidget()->hide();
+		parent->hide();
 	}
 	else
 	{
 		hide();
 	}
 	ce->ignore();
- }
+}
 
 
 

@@ -584,14 +584,10 @@ void SongEditor::wheelEvent( QWheelEvent * we )
 
 void SongEditor::closeEvent( QCloseEvent * ce )
 {
-	if( parentWidget() )
-	{
-		parentWidget()->hide();
-	}
-	else
-	{
-		hide();
-	}
+	if (getGUI()->mainWindow()->isQuitting()) { ce->accept(); return; }
+	QWidget* parent = parentWidget();
+	if (parent && parent->isVisible()) { parent->hide(); }
+	else { hide(); }
 	ce->ignore();
 }
 

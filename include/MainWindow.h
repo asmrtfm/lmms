@@ -46,6 +46,7 @@ namespace gui
 {
 
 class PluginView;      // Forward declaration for tool plugin UI views
+class SideBar;         // Forward declaration for the file/plugin browser sidebar panel
 class SubWindow;       // Forward declaration for MDI sub-windows in the workspace
 class ToolButton;      // Forward declaration for toolbar toggle buttons
 class GuiApplication;  // Forward declaration for the friend class that constructs MainWindow
@@ -72,6 +73,13 @@ public:
 	{
 		return m_workspace;
 	}
+
+	/// Return true if multi-window mode is currently active.
+	bool isMultiWindowMode() const;
+
+	/// Return true if the application is in the process of quitting.
+	/// Detached editor windows use this to accept their close events during shutdown.
+	bool isQuitting() const { return m_isQuitting; }
 
 	/// Return the main toolbar widget at the top of the window
 	QWidget* toolBar()
@@ -206,7 +214,7 @@ public slots:
 	/// Open the LMMS documentation in the default web browser
 	void help();
 	/// Toggle visibility of the Automation Editor window
-	void toggleAutomationEditorWin();
+	void toggleAutomationEditorWin(bool forceShow = false);
 	/// Toggle visibility of the Pattern Editor window (forceShow=true to always show)
 	void togglePatternEditorWin(bool forceShow = false);
 	/// Toggle visibility of the Song Editor window
@@ -218,11 +226,14 @@ public slots:
 	/// Toggle visibility of the Mixer (FX mixer) window
 	void toggleMixerWin();
 	/// Toggle visibility of the Piano Roll window
-	void togglePianoRollWin();
+	void togglePianoRollWin(bool forceShow = false);
 	/// Toggle visibility of the Controller Rack window
 	void toggleControllerRack();
 	/// Toggle fullscreen mode for the main window
 	void toggleFullscreen();
+
+	/// Toggle between single-window (MDI) and multi-window (OS-level) modes.
+	void toggleMultiWindowMode();
 
 	/// Update play/pause button icons based on current playback state
 	void updatePlayPauseIcons();
@@ -266,6 +277,10 @@ private:
 
 	/// Toggle a sub-window's visibility; forceShow=true ensures it becomes visible
 	void toggleWindow( QWidget *window, bool forceShow = false );
+
+	/// Enter or exit multi-window mode. Detaches/attaches the 4 timeline editors
+	/// (Song, Pattern, Piano Roll, Automation) as independent OS windows.
+	void setMultiWindowMode(bool enabled);
 
 	/// Export the project as audio; multiExport=true exports each track separately
 	void exportProject(bool multiExport = false);
@@ -317,6 +332,9 @@ private:
 	SessionState m_session;      ///< Current session state (Normal or Recover)
 
 	bool maximized;              ///< Tracks whether the window was maximized before fullscreen
+
+	bool m_multiWindowMode;          ///< True when the 4 timeline editors are free-floating OS windows
+	bool m_isQuitting = false;       ///< Set true in closeEvent so detached editors can exit cleanly
 
 private slots:
 	/// Open the LMMS help/documentation URL in the default browser

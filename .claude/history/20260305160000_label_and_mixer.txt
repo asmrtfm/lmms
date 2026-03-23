@@ -1,0 +1,17 @@
+User: Start with duplicate instrument track label handling (use same normalization
+steps as the other tracks). Then move on to the mixer channel remapping.
+
+Response: Implemented both features.
+
+1. Track label normalization in XmlToSqlite.cpp:
+   - Added normalizeTrackLabel() matching Track::normalizeTrackNames rules
+   - Applied to patternstore, song instrument tracks, and pattern tracks
+   - Each container has independent normalization scope
+
+2. Mixer channel import remapping in TrackOperationsWidget.cpp:
+   - Parses <mixerchannels> from .xppt, checks conflicts with isChannelInUse()
+   - Creates new channels for conflicts, copies settings (name, color, volume, mute, solo, fx)
+   - Sets up sends with remapped indices
+   - Rewrites mixch/fxch DOM attributes before track loading
+
+All 7 tests pass. Both features await user testing.

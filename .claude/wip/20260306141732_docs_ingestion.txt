@@ -1,0 +1,15 @@
+## Task: LMMS Docs Scrape and Ingest
+Status: IN PROGRESS - rubot ingestion running
+
+### What's Done
+- All 76 LMMS doc pages fetched to /tmp/lmms-docs-scrape/*.md
+- .mcp.json updated with lmms-docs GitBook MCP server
+- rubot ingest running (background task b72cgds98)
+
+### What's Remaining
+- Wait for rubot ingest to complete (processing 76 files through Ollama)
+- Verify ingestion with `rubot status`
+- Test queries against the new knowledge
+- Update MEMORY.md with new capabilities
+- The lmms-docs MCP server needs a session restart to become available
+  (it's configured in .mcp.json but not connected in current session)

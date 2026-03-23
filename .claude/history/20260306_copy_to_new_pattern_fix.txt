@@ -1,0 +1,17 @@
+User: Fix the copy-to-new-pattern-track feature which was producing ghost notes from unselected time ranges, specifically for AudioFileProcessor BeatClip tracks.
+
+Root Cause: The repetition period in copySelectionToNewPatternTrack() used per-MidiClip length (mClip->length().nextFullBar() * ticksPerBar) instead of the shared pattern length from PatternStore::lengthOfPattern(). In LMMS, ALL InstrumentTracks in a pattern loop at the SAME period (the max length across all tracks), not at their individual clip lengths. Short clips (hihat, snare with 1-2 bar periods) were repeating too frequently, producing notes that don't actually play during those time windows.
+
+Evidence: User provided a.mmp (before), b.mmp (buggy result), c.mmp (correct result), and screenshots showing:
+- a_1.png: vertical demarcation lines cutting through middle of beat notes (step grid misalignment)
+- b.png: ghost notes for hihat_closed01, hihat_opened01, snare06 (should have 0 notes)
+- c.png: correct result with only kick02, ride01, sidestick01 having notes
+
+Data comparison:
+- Source pattern index 4 ("Pattern 3 001"): kick02/ride01/sidestick01 span 3 bars, hihat/snare span 1-2 bars
+- Buggy: all tracks have steps=64 (inflated by addSteps), short-period tracks have ghost notes
+- Correct: all tracks have steps=16 (preserved from source), short-period tracks have 0 notes
+
+Fix applied to PatternClipView.cpp:
+1. Replaced mClip->length().nextFullBar() * ticksPerBar with Engine::patternStore()->lengthOfPattern(ownerPatternTrackIndex) * ticksPerBar for the repetition period
+2. Replaced the blanket addSteps() loop with type-aware logic: BeatClips get addSteps() only until they reach the target length, MelodyClips get updateLength()

@@ -1,0 +1,29 @@
+User: Continued from previous session. Needed to fix rubot/auto-learn skill files that had incorrect guidance about music model usage (the --offline flag distinction was wrong).
+
+User corrections across multiple messages:
+1. "rubot is the interface for a RAG system. You wrote every line of code in it. Go refamiliarize yourself with that project since you clearly have forgotten."
+2. "obviously preventing the use of a model for the ingest stage would defeat the entire purpose of the system"
+3. "you need to be smarter about knowing when to use which kind of model for every single instance where a model is used in rubot"
+4. "rubot is both a software project that you are responsible for maintaining AND is a tool that you will use to improve yourself in the context of other projects such as lmms - rubot is supposed to be your brain - your longterm memory"
+5. "music models should not be an option for ingest"
+6. Detailed explanation of embedding/music/general model routing rules:
+   - Embedding models: only excluded from chat model selection menus and auto-selection for chat. Must never be blocked from generating embeddings.
+   - Music models: remain in selection menus (user can explicitly choose), but never auto-selected for pipeline operations. Auto-selected only for music-specific operations.
+   - build-knowledge music enrichment: music models layer on top of existing technical knowledge to create music-theory-aware derived knowledge (e.g., quantization dropdown values -> understanding of triplet timing in context of music production)
+
+Response: Re-read entire rubot codebase (~47 Python files). Mapped all model usage points:
+- Embedding model (nomic-embed-text): embeddings only, no routing issues
+- Chat/pipeline model (resolve_chat_model): entity extraction, summarization, query expansion, reranking, category summarization, offline answers
+- Music models (resolve_music_model): music consultation, music enrichment in build-knowledge
+
+Code changes made to rubot:
+1. constants.py: Added MUSIC_MODEL_PREFIXES (derived from MusicModel enum values) after the MusicModel enum definition
+2. generation/ollama.py:
+   - Added _is_music_model() and _model_base_name() helper functions
+   - Refactored _is_embedding_model() to use shared _model_base_name()
+   - Updated resolve_chat_model() auto-detection to filter out music models
+   - Added informative warning when music models are skipped and no general model available
+
+Skill files updated:
+1. ~/.claude/skills/rubot/SKILL.md: Complete rewrite with correct 3-model-path architecture documentation
+2. ~/.claude/skills/auto-learn/SKILL.md: Updated model usage section to reflect auto-detection filtering

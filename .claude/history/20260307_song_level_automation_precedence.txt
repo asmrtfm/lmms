@@ -1,0 +1,25 @@
+## User Request
+User wants to automate pattern-track instruments via Song Editor automation tracks.
+The feature appeared to exist (right-click knob -> "Edit song-global automation") but
+didn't actually work.
+
+## Root Cause
+In `TrackContainer::automatedValuesFromTracks()`, automation clips and pattern clips
+are processed in position order. Pattern clips trigger `patStore->automatedValuesAt()`
+which returns values from ALL hidden automation tracks in the pattern store (every
+AutomatableModel gets a HiddenAutomation clip with an initial value at tick 0).
+
+These pattern-store automation values unconditionally override Song-level automation
+values (line 324: `valueMap[it.key()] = it.value()`), making Song-level automation
+of pattern-store instruments ineffective.
+
+## Fix
+In `TrackContainer::automatedValuesFromTracks()` (src/core/TrackContainer.cpp):
+- Added `QSet<AutomatableModel*> songAutomatedModels` to track which models have
+  been set by Song-level (explicit) automation clips
+- When processing pattern clip automation values, skip models already in the set
+- Song-level automation now takes precedence over pattern-store defaults
+
+## Verification
+- Build: clean
+- Full test suite: 8/8 pass

@@ -1,0 +1,23 @@
+## User Request
+Continued from previous session. Task was to add `project_create_mixer_channel` tool to lmms-mcp server.py and fix the Noctilux song's mixer routing.
+
+## What Was Done
+
+### 1. Added `project_create_mixer_channel` tool to MCP server
+File: mcp-lmms-sqlite/server.py (after line 554, right after `project_update_mixer_channel`)
+
+The tool:
+- Accepts db_path, name, volume (default 1.0), muted (default 0), route_to_master (default True)
+- Auto-assigns next available channel ID via `_next_id()`
+- Inserts into `mixer_channel` table
+- Optionally creates a `mixer_route` send to channel 0 (Master)
+- Returns the created channel_id
+
+### 2. Fixed Noctilux song mixer routing
+- Created 5 mixer channels: Kick(1), Sub Bass(2), Atmosphere(3), Noctilux Lead(4), Hi-Hat(5)
+- Created routes from each channel to Master (channel 0)
+- Updated all 5 instrument_tracks to point to their respective mixer channels
+- Used project_query SQL since the new MCP tool requires a server restart to become available
+
+### Standing Policy
+User has given blanket permission to add/improve lmms-mcp tools as needed without asking.

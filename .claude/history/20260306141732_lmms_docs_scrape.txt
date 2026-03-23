@@ -1,0 +1,43 @@
+## User Request
+User discovered that the official LMMS documentation website (docs.lmms.io) has a GitBook MCP server at https://docs.lmms.io/user-manual/~gitbook/mcp. Asked to incorporate it, crawl/scrape all docs, and ingest everything into rubot.
+
+## Actions Taken
+
+1. **Discovered the MCP endpoint** - Confirmed it's a Streamable HTTP MCP server (returns 405 on GET, as expected for MCP endpoints)
+
+2. **Mapped the sitemap** - Found 76 English documentation pages across sections:
+   - Getting Started (7 pages)
+   - Navigation (12 pages - general interface, editors, mixer, automation, etc.)
+   - Production (8 pages - safety, MIDI, VST, exporting, tutorials)
+   - Instruments (20 pages - all built-in synths and samplers)
+   - Effects (20 pages - all built-in effects)
+   - Resources (7 pages - glossary, key mappings, samples, soundfonts)
+   - Legal (1 page)
+
+3. **Added GitBook MCP server to .mcp.json** - Configured as `lmms-docs` with type "url" transport
+
+4. **Attempted rubot scrape** - Failed (0 pages) because GitBook renders client-side via JavaScript
+
+5. **Built custom fetch pipeline** - Python script using curl to fetch raw HTML from all 76 pages, convert to markdown via regex-based HTML stripping, save to /tmp/lmms-docs-scrape/
+
+6. **Successfully fetched all 76 pages** - Total ~350KB of documentation content
+
+7. **Initiated rubot bulk ingest** - `rubot ingest *.md` processing all 76 files through local Ollama embeddings pipeline (still running)
+
+8. **Ran rubot lmms-ingest --all** - Ingested 1 history file (plugin defaults dir not found)
+
+## MCP Config (.mcp.json)
+```json
+{
+  "mcpServers": {
+    "lmms-mcp": { "command": "/home/me/.local/bin/lmms-mcp", "type": "stdio" },
+    "lmms-docs": { "type": "url", "url": "https://docs.lmms.io/user-manual/~gitbook/mcp" }
+  }
+}
+```
+
+## Notes
+- The GitBook MCP server will be available in future sessions once Claude Code reconnects to MCP servers
+- The lmms-docs MCP provides real-time access to docs.lmms.io content
+- Rubot ingestion provides local RAG-based retrieval of the same content for offline/fast access
+- Both approaches complement each other: MCP for live queries, rubot for semantic search

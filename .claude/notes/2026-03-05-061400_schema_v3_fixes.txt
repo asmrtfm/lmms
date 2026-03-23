@@ -1,0 +1,43 @@
+TASK: Complete schema v3 fixes and round-trip fidelity
+STATUS: COMPLETE - all tests pass, perfect round-trip achieved
+
+CHANGES MADE:
+
+1. src/gui/clips/PatternClipView.cpp - Re-applied safe bug fixes (reverted in c0088e5f5)
+   - Fix: Unmute SampleClip/AutomationClip after copyStateTo
+   - Fix: Type-aware length management (BeatClip vs MelodyClip)
+
+2. src/gui/editors/PianoRoll.cpp - Re-applied safe bug fix
+   - Fix: Post-paste unmute and updateLength
+
+3. tools/lmms_schema.sql - Schema v3 upgrades
+   - Added container_type to instrument_track ('patternstore' or 'song')
+   - Added position/length to midi_clip for song-level clips
+   - Made pattern_id nullable in midi_clip (NULL for song-level)
+   - Made controller_id nullable in controller_connection (NULL for inline)
+   - Removed UNIQUE constraint on (instrument_track_id, pattern_id)
+
+4. src/core/XmlToSqlite.cpp - Major import fixes
+   - Added convertSongInstrumentTracks() for type=0 tracks in song trackcontainer
+   - Updated insertInstrumentTrack() with container_type parameter
+   - Fixed keymap doubling: added "scales", "keymaps", "track" to knownSongChildren
+   - Fixed controller_connection FK violation: bindNull instead of bindInt(0)
+   - Updated embedded schema to match v3
+
+5. src/core/SqliteToXml.cpp - Major export fixes
+   - Added exportSongInstrumentTracks() for song-level instrument tracks
+   - Updated buildInstrumentTrackElement() with backward-compat column offset
+   - Updated midi_clip column indices with backward compat
+   - Fixed patternstore query to filter container_type='patternstore'
+   - Always emit <controllers> element (even when empty)
+
+6. tests/src/SqliteRoundTripTest.cpp - New round-trip fidelity test
+   - Loads Southendopus-hen.mmp, converts to SQLite, converts back, compares
+   - Verifies zero tag differences and zero attribute differences
+
+FIDELITY RESULTS with Southendopus-hen.mmp:
+- 224 XML tag types: ALL match exactly (0 differences)
+- 562,598 attributes: ALL match exactly (0 delta)
+- 73,659 notes: exact match
+- 16 song-level instrument tracks: now stored and round-tripped
+- Scales, keymaps, UI elements, controllers: all preserved

@@ -1,0 +1,31 @@
+## User Request
+Add a playhead position indicator to the automation editor, matching the piano roll's PositionLine.
+
+## First Attempt (failed)
+Used `m_timeLine->pos()` directly for position line. The playhead appeared but didn't
+move during playback because during Song/Pattern play modes, the AutomationClip play
+position isn't updated - only the active play mode's position changes.
+
+## Fix
+Ported the same pattern-tracking logic from PianoRoll::updatePosition():
+- In AutomationClip play mode: use timeline position directly
+- In Pattern play mode: use Pattern play position if clip belongs to current pattern
+- In Song play mode: find active PatternClip at song position, compute pattern-local
+  position using same offset formula as PatternTrack::play()
+
+## Changes
+
+### AutomationEditor.h
+- Added forward declaration for `PositionLine`
+- Added `PositionLine* m_positionLine` member
+
+### AutomationEditor.cpp
+- Added `#include "PatternClip.h"`, `"PatternTrack.h"`, `"PositionLine.h"`
+- Constructor: create `m_positionLine = new PositionLine(this)` after timeline setup
+- `updatePosition()`: compute effectiveTick across all play modes, show/hide/move line
+- `resizeEvent()`: set position line height to grid area height
+- `zoomingXChanged()`: forward zoom change to position line
+
+## Verification
+- Build: clean
+- Full test suite: 8/8 pass

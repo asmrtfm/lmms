@@ -1,0 +1,49 @@
+## User Request
+User asked to ensure rubot uses tagging to organize and distinguish embedded knowledge domains.
+Also asked to determine which local Ollama models are best for the RAG query pipeline and pull any missing good ones.
+
+## Response
+
+### Tagging System Implementation
+Rubot actually had a sophisticated schema already (categories with centroids, entities, GIN-indexed arrays),
+but lacked explicit tags -- only auto-discovered clustering categories existed (just 2).
+
+Added a full tagging system:
+
+**Schema changes:**
+- `tags` ARRAY(Text) on Document model with GIN index
+- `tags` ARRAY(Text) on ChunkRecord (denormalized) with GIN index
+- Alembic migration 004_add_tags.py
+
+**Pipeline changes:**
+- `--tag` flag on `rubot ingest` (repeatable, e.g. `--tag lmms-docs --tag effects`)
+- `--tag` flag on `rubot query` (filters results to tagged domain)
+- Tags propagate from Document to all ChunkRecords during ingest
+- vector_search and keyword_search both support tag filtering via `&& :tags` GIN overlap
+
+**Management commands:**
+- `rubot tag list` -- shows all tags with document counts
+- `rubot tag add <tag> <pattern>` -- bulk-tag by title pattern
+- `rubot tag remove <tag> <pattern>` -- bulk-untag by title pattern
+
+**Initial tagging:**
+- lmms-docs: 19 docs (scraped docs.lmms.io)
+- lmms-internal: 48 docs (plugin defaults, SQLite format docs, track docs)
+- rubot-docs: 10 docs (rubot's own documentation)
+- music-reference: 1 doc (MIDI note reference)
+
+### Model Assessment
+Current Ollama models for RAG pipeline:
+- Embeddings: nomic-embed-text (768-dim) -- good, keep
+- Chat/generation: codestral (12GB) -- code-focused, not ideal for NL synthesis
+- Reranker: Qwen3-Reranker-8B -- dedicated reranker, great
+- Pulling qwen3:8b as better general-purpose model for query expansion/summarization
+
+### Files Modified (in rubot repo)
+- src/rubot/db/models.py
+- src/rubot/cli.py
+- src/rubot/ingest/pipeline.py
+- src/rubot/retrieval/vector_search.py
+- src/rubot/retrieval/keyword_search.py
+- src/rubot/retrieval/pipeline.py
+- alembic/versions/004_add_tags.py

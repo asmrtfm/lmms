@@ -683,7 +683,7 @@ void MicrotunerConfig::loadSettings(const QDomElement &element)
 
 void MicrotunerConfig::closeEvent(QCloseEvent *ce)
 {
-	if (QApplication::closingDown()) { ce->accept(); return; }
+	if (getGUI()->mainWindow()->isQuitting()) { ce->accept(); return; }
 	QWidget* parent = parentWidget();
 	if (parent && parent->isVisible())
 	{

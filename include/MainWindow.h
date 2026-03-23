@@ -77,6 +77,10 @@ public:
 	/// Return true if multi-window mode is currently active.
 	bool isMultiWindowMode() const;
 
+	/// Return true if the application is in the process of quitting.
+	/// Detached editor windows use this to accept their close events during shutdown.
+	bool isQuitting() const { return m_isQuitting; }
+
 	/// Return the main toolbar widget at the top of the window
 	QWidget* toolBar()
 	{
@@ -274,8 +278,8 @@ private:
 	/// Toggle a sub-window's visibility; forceShow=true ensures it becomes visible
 	void toggleWindow( QWidget *window, bool forceShow = false );
 
-	/// Enter or exit multi-window mode. Detaches/attaches all 8 main editors
-	/// and the SideBar; collapses or restores the workspace container.
+	/// Enter or exit multi-window mode. Detaches/attaches the 4 timeline editors
+	/// (Song, Pattern, Piano Roll, Automation) as independent OS windows.
 	void setMultiWindowMode(bool enabled);
 
 	/// Export the project as audio; multiExport=true exports each track separately
@@ -329,11 +333,8 @@ private:
 
 	bool maximized;              ///< Tracks whether the window was maximized before fullscreen
 
-	bool m_multiWindowMode;          ///< True when editors are free-floating OS windows
-	SideBar* m_sideBar;              ///< The file/plugin browser sidebar panel
-	QWidget* m_workspaceContainer;  ///< The widget containing the sidebar + MDI area
-	QWidget* m_sideBarWindow;        ///< Wrapper OS window housing SideBar in multi-window mode (nullptr in MDI mode)
-	bool m_sideBarOnRight;           ///< True if sidebar is configured on the right side
+	bool m_multiWindowMode;          ///< True when the 4 timeline editors are free-floating OS windows
+	bool m_isQuitting = false;       ///< Set true in closeEvent so detached editors can exit cleanly
 
 private slots:
 	/// Open the LMMS help/documentation URL in the default browser

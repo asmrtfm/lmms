@@ -526,7 +526,7 @@ void MixerView::keyPressEvent(QKeyEvent * e)
 
 void MixerView::closeEvent(QCloseEvent * ce)
 {
-	if (QApplication::closingDown()) { ce->accept(); return; }
+	if (getGUI()->mainWindow()->isQuitting()) { ce->accept(); return; }
 	QWidget* parent = parentWidget();
 	if (parent && parent->isVisible())
 	{

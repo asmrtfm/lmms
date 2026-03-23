@@ -53,6 +53,7 @@ namespace gui
 
 class Knob;
 class ComboBox;
+class PositionLine;
 class TimeLineWidget;
 
 
@@ -270,6 +271,7 @@ private:
 	bool m_mouseDownRight; //true if right click is being held down
 
 	TimeLineWidget * m_timeLine;
+	PositionLine * m_positionLine;
 	bool m_scrollBack;
 
 	void drawCross(QPainter & p );

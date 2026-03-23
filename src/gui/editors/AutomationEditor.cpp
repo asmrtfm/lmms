@@ -55,8 +55,11 @@
 #include "Knob.h"
 #include "MainWindow.h"
 #include "MidiClip.h"
+#include "PatternClip.h"
 #include "PatternStore.h"
+#include "PatternTrack.h"
 #include "PianoRoll.h"
+#include "PositionLine.h"
 #include "ProjectJournal.h"
 #include "SampleBuffer.h"
 #include "StringPairDrag.h"
@@ -141,6 +144,9 @@ AutomationEditor::AutomationEditor() :
 	connect(this, &AutomationEditor::positionChanged, m_timeLine, &TimeLineWidget::updatePosition);
 	connect( m_timeLine, SIGNAL( positionChanged( const lmms::TimePos& ) ),
 			this, SLOT( updatePosition( const lmms::TimePos& ) ) );
+
+	// playhead position line
+	m_positionLine = new PositionLine(this);
 
 	// init scrollbars
 	m_leftRightScroll = new QScrollBar( Qt::Horizontal, this );
@@ -1555,6 +1561,7 @@ void AutomationEditor::resizeEvent(QResizeEvent * re)
 	centerTopBottomScroll();
 
 	m_timeLine->setFixedWidth(width());
+	m_positionLine->setFixedHeight(height() - TOP_MARGIN - SCROLLBAR_SIZE);
 
 	updateTopBottomLevels();
 	update();
@@ -1827,6 +1834,76 @@ void AutomationEditor::updatePosition(const TimePos & t )
 		}
 		m_scrollBack = false;
 	}
+
+	// Determine the effective playhead tick for the position line.
+	// In AutomationClip play mode, use the timeline position directly.
+	// In Pattern/Song play mode, compute the pattern-local position so
+	// the playhead tracks playback within the currently-open clip.
+	Song* song = Engine::getSong();
+	const auto mode = song->playMode();
+	const bool isPlaying = song->isPlaying();
+	int effectiveTick = static_cast<int>(m_timeLine->pos());
+
+	if (isPlaying && validClip()
+		&& m_clip->getTrack()
+		&& m_clip->getTrack()->trackContainer() == Engine::patternStore())
+	{
+		int clipIndex = m_clip->getTrack()->getClipNum(m_clip);
+
+		if (mode == Song::PlayMode::Pattern)
+		{
+			if (clipIndex == Engine::patternStore()->currentPattern())
+			{
+				effectiveTick = song->getPlayPos(Song::PlayMode::Pattern).getTicks();
+			}
+		}
+		else if (mode == Song::PlayMode::Song)
+		{
+			tick_t songTick = song->getPlayPos(Song::PlayMode::Song).getTicks();
+			const auto& songTracks = song->tracks();
+			for (Track* track : songTracks)
+			{
+				if (track->type() != Track::Type::Pattern || track->isMuted()) { continue; }
+				auto* patternTrack = dynamic_cast<PatternTrack*>(track);
+				if (patternTrack->patternIndex() != clipIndex) { continue; }
+
+				Track::clipVector clips;
+				patternTrack->getClipsInRange(clips, TimePos(songTick), TimePos(songTick + 1));
+				for (const auto& clip : clips)
+				{
+					if (clip->isMuted()) { continue; }
+					auto* patClip = dynamic_cast<PatternClip*>(clip);
+					if (!patClip) { continue; }
+
+					tick_t posInClip = songTick - clip->startPosition();
+					if (posInClip < 0 || posInClip >= clip->length()) { continue; }
+
+					tick_t patternLength = Engine::patternStore()->lengthOfPattern(clipIndex)
+						* TimePos::ticksPerBar();
+					if (patternLength <= 0) { continue; }
+
+					tick_t offset = patternLength - (clip->startTimeOffset() % patternLength);
+					if (offset == patternLength) { offset = 0; }
+
+					effectiveTick = (posInClip + offset) % patternLength;
+					break;
+				}
+				break;
+			}
+		}
+	}
+
+	// Update playhead position line
+	const int pos = xCoordOfTick(effectiveTick);
+	if (pos >= VALUES_WIDTH && pos <= width())
+	{
+		m_positionLine->show();
+		m_positionLine->move(pos - (m_positionLine->width() - 1), TOP_MARGIN);
+	}
+	else
+	{
+		m_positionLine->hide();
+	}
 }
 
 
@@ -1839,6 +1916,7 @@ void AutomationEditor::zoomingXChanged()
 	assert( m_ppb > 0 );
 
 	m_timeLine->setPixelsPerBar( m_ppb );
+	m_positionLine->zoomChange(m_zoomXLevels[m_zoomingXModel.value()]);
 	update();
 }
 

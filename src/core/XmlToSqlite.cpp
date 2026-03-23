@@ -32,6 +32,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMap>
+#include <QRegularExpression>
 #include <QSet>
 #include <QTextStream>
 
@@ -53,6 +54,51 @@ void logMsg(const char* fmt, ...)
 	vfprintf(stderr, fmt, args);
 	fprintf(stderr, "\n");
 	va_end(args);
+}
+
+// Normalize a track label using the same rules as Track::normalizeTrackNames:
+// 1. Remove "Clone of" prefix  2. Replace whitespace with underscores
+// 3. Append _001, _002 etc. for conflicts
+QString normalizeTrackLabel(const QString& rawName, const QSet<QString>& existingNames)
+{
+	static const QRegularExpression cloneJank(
+		R"([Cc]lone[\s+\-_]+of[\s+\-_]+)", QRegularExpression::CaseInsensitiveOption);
+	static const QRegularExpression whitespace(R"(\s+)");
+
+	QString candidate = rawName;
+	candidate.remove(cloneJank);
+	candidate = candidate.trimmed();
+	candidate.replace(whitespace, "_");
+
+	if (!existingNames.contains(candidate)) { return candidate; }
+
+	// Conflict: append or increment 3-digit counter
+	int len = candidate.length();
+	bool hasCounter = (len >= 3
+		&& candidate[len - 3].isDigit() && candidate[len - 3] == '0'
+		&& candidate[len - 2].isDigit()
+		&& candidate[len - 1].isDigit());
+
+	if (hasCounter)
+	{
+		QString base = candidate.left(len - 3);
+		int existing = candidate.mid(len - 3).toInt();
+		for (int c = existing + 1; c < 1000; ++c)
+		{
+			candidate = QString("%1%2").arg(base).arg(c, 3, 10, QChar('0'));
+			if (!existingNames.contains(candidate)) { return candidate; }
+		}
+	}
+	else
+	{
+		QString base = candidate + "_";
+		for (int c = 1; c < 1000; ++c)
+		{
+			candidate = QString("%1%2").arg(base).arg(c, 3, 10, QChar('0'));
+			if (!existingNames.contains(candidate)) { return candidate; }
+		}
+	}
+	return candidate;
 }
 
 // RAII sqlite3 wrapper
@@ -1012,6 +1058,7 @@ void convertPatternstore(SqliteDb& db, const QDomElement& pstoreElem,
 	static const QSet<QString> knownMcAttrs = {"pos", "type", "steps", "muted", "mute", "name", "color", "len"};
 
 	// Second pass: convert instrument tracks and their midiclips
+	QSet<QString> usedNames;
 	int itCount = 0, mcCount = 0, noteCount = 0;
 	trackElem = pstoreElem.firstChildElement("track");
 	while (!trackElem.isNull())
@@ -1028,6 +1075,10 @@ void convertPatternstore(SqliteDb& db, const QDomElement& pstoreElem,
 			trackElem = trackElem.nextSiblingElement("track");
 			continue;
 		}
+
+		// Normalize track label (same rules as Track::normalizeTrackNames)
+		data.name = normalizeTrackLabel(data.name, usedNames);
+		usedNames.insert(data.name);
 
 		sqlite3_int64 itId = insertInstrumentTrack(db, data, itCount);
 
@@ -1098,6 +1149,7 @@ void convertSongInstrumentTracks(SqliteDb& db, const QDomElement& songTc)
 {
 	static const QSet<QString> knownMcAttrs = {"pos", "type", "steps", "muted", "mute", "name", "color", "len"};
 
+	QSet<QString> usedNames;
 	int itCount = 0, mcCount = 0, noteCount = 0;
 	auto trackElem = songTc.firstChildElement("track");
 	while (!trackElem.isNull())
@@ -1114,6 +1166,10 @@ void convertSongInstrumentTracks(SqliteDb& db, const QDomElement& songTc)
 			trackElem = trackElem.nextSiblingElement("track");
 			continue;
 		}
+
+		// Normalize track label (same rules as Track::normalizeTrackNames)
+		data.name = normalizeTrackLabel(data.name, usedNames);
+		usedNames.insert(data.name);
 
 		sqlite3_int64 itId = insertInstrumentTrack(db, data, itCount, "song");
 
@@ -1186,6 +1242,7 @@ void convertPatternTracks(SqliteDb& db, const QDomElement& songTc,
 	static const QSet<QString> knownTrackAttrs = {"type", "name", "muted", "solo", "color"};
 	static const QSet<QString> knownPcAttrs = {"pos", "len", "off", "muted", "name", "color"};
 
+	QSet<QString> usedNames;
 	int ptCount = 0, pcCount = 0;
 	int patternTrackIdx = 0;
 
@@ -1198,7 +1255,9 @@ void convertPatternTracks(SqliteDb& db, const QDomElement& songTc,
 			continue;
 		}
 
-		QString name = trackElem.attribute("name", QString("Pattern Track %1").arg(patternTrackIdx));
+		QString rawName = trackElem.attribute("name", QString("Pattern Track %1").arg(patternTrackIdx));
+		QString name = normalizeTrackLabel(rawName, usedNames);
+		usedNames.insert(name);
 		int muted = trackElem.attribute("muted", "0").toInt();
 		int solo = trackElem.attribute("solo", "0").toInt();
 		QString color = trackElem.attribute("color", "");

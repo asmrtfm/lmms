@@ -459,6 +459,7 @@ void SubWindow::attach()
 
 	widget()->hide();
 	widget()->setWindowFlags(widget()->windowFlags() & ~Qt::Window);
+	widget()->show(); // Re-show as embedded MDI child content
 
 	if (m_wasVisible) { show(); } else { hide(); }
 	adjustTitleBar();

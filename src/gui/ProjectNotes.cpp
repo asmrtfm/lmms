@@ -392,6 +392,7 @@ void ProjectNotes::loadSettings( const QDomElement & _this )
 
 void ProjectNotes::closeEvent( QCloseEvent * _ce )
 {
+	if (QApplication::closingDown()) { _ce->accept(); return; }
 	QWidget* parent = parentWidget();
 	if (parent && parent->isVisible())
 	{

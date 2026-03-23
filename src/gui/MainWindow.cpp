@@ -28,6 +28,7 @@
 // System/Qt headers
 #include <QApplication>
 #include <QCloseEvent>
+#include <QVBoxLayout>
 #include <QDesktopServices>
 #include <QDomElement>
 #include <QFileInfo>
@@ -111,6 +112,7 @@ MainWindow::MainWindow() :
 	m_multiWindowMode( false ),
 	m_sideBar( nullptr ),
 	m_workspaceContainer( nullptr ),
+	m_sideBarWindow( nullptr ),
 	m_sideBarOnRight( false )
 {
 	// Allow Qt to delete the window when it is closed
@@ -2538,10 +2540,18 @@ void MainWindow::setMultiWindowMode(bool enabled)
 			sbW = m_sideBar->sizeHint().width();
 			sbH = 600;
 		}
-		m_sideBar->setWindowFlags(m_sideBar->windowFlags() | Qt::Window);
-		m_sideBar->setWindowTitle(tr("LMMS Browser"));
-		m_sideBar->setGeometry(sbX, sbY, sbW, sbH);
+		// Wrap the SideBar in a plain QWidget OS window.
+		// Using Qt::Window directly on a QToolBar activates its floating-toolbar
+		// logic which scrambles the tab layout; a wrapper avoids that.
+		m_sideBarWindow = new QWidget(nullptr, Qt::Window);
+		m_sideBarWindow->setWindowTitle(tr("LMMS Browser"));
+		auto* sbLayout = new QVBoxLayout(m_sideBarWindow);
+		sbLayout->setContentsMargins(0, 0, 0, 0);
+		m_sideBar->setParent(m_sideBarWindow);
+		sbLayout->addWidget(m_sideBar);
 		m_sideBar->show();
+		m_sideBarWindow->setGeometry(sbX, sbY, sbW, sbH);
+		m_sideBarWindow->show();
 
 		// Collapse MainWindow to just the toolbar (launchpad mode)
 		m_workspaceContainer->hide();
@@ -2552,15 +2562,28 @@ void MainWindow::setMultiWindowMode(bool enabled)
 	{
 		// --- Exit multi-window mode ---
 
-		// Save SideBar geometry before re-embedding
-		ConfigManager::inst()->setValue("ui", "sideBar_mw_x", QString::number(m_sideBar->x()));
-		ConfigManager::inst()->setValue("ui", "sideBar_mw_y", QString::number(m_sideBar->y()));
-		ConfigManager::inst()->setValue("ui", "sideBar_mw_w", QString::number(m_sideBar->width()));
-		ConfigManager::inst()->setValue("ui", "sideBar_mw_h", QString::number(m_sideBar->height()));
+		// Save SideBar geometry from the wrapper window before destroying it
+		if (m_sideBarWindow)
+		{
+			ConfigManager::inst()->setValue("ui", "sideBar_mw_x", QString::number(m_sideBarWindow->x()));
+			ConfigManager::inst()->setValue("ui", "sideBar_mw_y", QString::number(m_sideBarWindow->y()));
+			ConfigManager::inst()->setValue("ui", "sideBar_mw_w", QString::number(m_sideBarWindow->width()));
+			ConfigManager::inst()->setValue("ui", "sideBar_mw_h", QString::number(m_sideBarWindow->height()));
+		}
 
-		// Re-embed SideBar into the layout
-		m_sideBar->hide();
-		m_sideBar->setWindowFlags(m_sideBar->windowFlags() & ~Qt::Window);
+		// Re-embed SideBar: reparent it back into the workspace container's hbox
+		// at the same position it occupied before (index 0 for left, end for right).
+		m_sideBar->setParent(m_workspaceContainer);
+		auto* hbox = qobject_cast<QHBoxLayout*>(m_workspaceContainer->layout());
+		if (hbox)
+		{
+			if (m_sideBarOnRight) { hbox->addWidget(m_sideBar); }
+			else { hbox->insertWidget(0, m_sideBar); }
+		}
+		m_sideBar->show();
+
+		// Destroy the wrapper window now that the sidebar is re-embedded
+		if (m_sideBarWindow) { m_sideBarWindow->close(); delete m_sideBarWindow; m_sideBarWindow = nullptr; }
 
 		// Re-attach all editor SubWindows back into the MDI area
 		for (QWidget* editor : mainEditors)
@@ -2571,7 +2594,6 @@ void MainWindow::setMultiWindowMode(bool enabled)
 
 		// Restore the workspace container (sidebar + MDI area)
 		m_workspaceContainer->show();
-		m_sideBar->show();
 
 		ConfigManager::inst()->setValue("ui", "multiWindowMode", "0");
 	}

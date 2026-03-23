@@ -232,6 +232,7 @@ void ControllerRackView::addController()
 
 void ControllerRackView::closeEvent( QCloseEvent * _ce )
 {
+	if (QApplication::closingDown()) { _ce->accept(); return; }
 	QWidget* parent = parentWidget();
 	if (parent && parent->isVisible())
 	{

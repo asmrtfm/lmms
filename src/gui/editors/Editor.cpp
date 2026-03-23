@@ -31,6 +31,7 @@
 #include "embed.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QShortcut>
 #include <QCloseEvent>
 
@@ -142,6 +143,9 @@ QAction *Editor::playAction() const
 
 void Editor::closeEvent(QCloseEvent * event)
 {
+	// Allow the event during app shutdown so Qt can exit cleanly.
+	if (QApplication::closingDown()) { event->accept(); return; }
+
 	QWidget* parent = parentWidget();
 	// In MDI mode the parent is a visible SubWindow — hide the wrapper.
 	// In multi-window mode the SubWindow wrapper is already hidden, so

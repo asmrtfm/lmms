@@ -332,6 +332,7 @@ private:
 	bool m_multiWindowMode;          ///< True when editors are free-floating OS windows
 	SideBar* m_sideBar;              ///< The file/plugin browser sidebar panel
 	QWidget* m_workspaceContainer;  ///< The widget containing the sidebar + MDI area
+	QWidget* m_sideBarWindow;        ///< Wrapper OS window housing SideBar in multi-window mode (nullptr in MDI mode)
 	bool m_sideBarOnRight;           ///< True if sidebar is configured on the right side
 
 private slots:

@@ -682,8 +682,15 @@ void MicrotunerConfig::loadSettings(const QDomElement &element)
 
 void MicrotunerConfig::closeEvent(QCloseEvent *ce)
 {
-	if (parentWidget()) {parentWidget()->hide();}
-	else {hide();}
+	QWidget* parent = parentWidget();
+	if (parent && parent->isVisible())
+	{
+		parent->hide();
+	}
+	else
+	{
+		hide();
+	}
 	ce->ignore();
 }
 

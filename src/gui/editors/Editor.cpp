@@ -142,9 +142,13 @@ QAction *Editor::playAction() const
 
 void Editor::closeEvent(QCloseEvent * event)
 {
-	if( parentWidget() )
+	QWidget* parent = parentWidget();
+	// In MDI mode the parent is a visible SubWindow — hide the wrapper.
+	// In multi-window mode the SubWindow wrapper is already hidden, so
+	// we hide ourselves instead (same net effect as MDI close).
+	if (parent && parent->isVisible())
 	{
-		parentWidget()->hide();
+		parent->hide();
 	}
 	else
 	{
@@ -152,7 +156,7 @@ void Editor::closeEvent(QCloseEvent * event)
 	}
 	getGUI()->mainWindow()->refocus();
 	event->ignore();
- }
+}
 
 DropToolBar::DropToolBar(QWidget* parent) : QToolBar(parent)
 {

@@ -107,7 +107,11 @@ MainWindow::MainWindow() :
 	m_autoSaveTimer( this ),      // Timer that triggers periodic auto-save
 	m_viewMenu( nullptr ),        // View menu, populated in finalize()
 	m_metronomeToggle( 0 ),       // Metronome toggle button in toolbar
-	m_session( SessionState::Normal ) // Normal session (not recovering)
+	m_session( SessionState::Normal ), // Normal session (not recovering)
+	m_multiWindowMode( false ),
+	m_sideBar( nullptr ),
+	m_workspaceContainer( nullptr ),
+	m_sideBarOnRight( false )
 {
 	// Allow Qt to delete the window when it is closed
 	setAttribute( Qt::WA_DeleteOnClose );
@@ -120,13 +124,15 @@ MainWindow::MainWindow() :
 	vbox->setContentsMargins(0, 0, 0, 0);
 
 	// Horizontal container for sidebar and workspace splitter
-	auto w = new QWidget(main_widget);
+	m_workspaceContainer = new QWidget(main_widget);
+	auto& w = m_workspaceContainer;
 	auto hbox = new QHBoxLayout(w);
 	hbox->setSpacing( 0 );
 	hbox->setContentsMargins(0, 0, 0, 0);
 
 	// Vertical sidebar with collapsible tabs for browsers
-	auto sideBar = new SideBar(Qt::Vertical, w);
+	m_sideBar = new SideBar(Qt::Vertical, w);
+	auto& sideBar = m_sideBar;
 
 	// Splitter separates sidebar content panels from the MDI workspace
 	auto splitter = new QSplitter(Qt::Horizontal, w);
@@ -134,7 +140,8 @@ MainWindow::MainWindow() :
 
 	// Read config to determine sidebar placement (left or right)
 	ConfigManager* confMgr = ConfigManager::inst();
-	bool sideBarOnRight = confMgr->value("ui", "sidebaronright").toInt();
+	m_sideBarOnRight = confMgr->value("ui", "sidebaronright").toInt();
+	const bool sideBarOnRight = m_sideBarOnRight;
 
 	// --- Populate sidebar tabs with file/plugin browsers ---
 
@@ -639,6 +646,15 @@ void MainWindow::finalize()
 	m_toolBarLayout->addWidget( mixer_window, 1, 5 );
 	m_toolBarLayout->addWidget( controllers_window, 1, 6 );
 	m_toolBarLayout->addWidget( project_notes_window, 1, 7 );
+
+	// Multi-window mode toggle (Ctrl+M)
+	auto multi_window_btn = new ToolButton(embed::getIconPixmap("maximize"),
+		tr("Toggle multi-window mode") + " (Ctrl+M)", this,
+		SLOT(toggleMultiWindowMode()), m_toolBar);
+	multi_window_btn->setShortcut(Qt::CTRL + Qt::Key_M);
+	multi_window_btn->setCheckable(true);
+	m_toolBarLayout->addWidget(multi_window_btn, 1, 8);
+
 	// Stretch column 100 to push all toolbar buttons to the left
 	m_toolBarLayout->setColumnStretch( 100, 1 );
 
@@ -690,6 +706,12 @@ void MainWindow::finalize()
 	for( const QMdiSubWindow * subWindow : workspace()->subWindowList() )
 	{
 		connect( subWindow, SIGNAL(windowStateChanged(Qt::WindowStates,Qt::WindowStates)), this, SLOT(resetWindowTitle()));
+	}
+
+	// Restore multi-window mode if it was active in the previous session
+	if (ConfigManager::inst()->value("ui", "multiWindowMode").toInt())
+	{
+		setMultiWindowMode(true);
 	}
 }
 
@@ -1453,7 +1475,23 @@ void MainWindow::help()
  */
 void MainWindow::toggleWindow( QWidget *window, bool forceShow )
 {
-	// Get the MDI sub-window parent
+	// In multi-window mode the editor widget IS the OS window — no SubWindow indirection
+	if (m_multiWindowMode)
+	{
+		if (forceShow || window->isHidden())
+		{
+			window->show();
+			window->raise();
+			window->activateWindow();
+		}
+		else
+		{
+			window->hide();
+		}
+		return;
+	}
+
+	// Single-window (MDI) mode: operate on the SubWindow parent wrapper
 	QWidget *parent = window->parentWidget();
 
 	if( forceShow ||
@@ -2425,6 +2463,118 @@ void MainWindow::onSongModified()
 void MainWindow::onProjectFileNameChanged()
 {
 	this->resetWindowTitle();
+}
+
+
+bool MainWindow::isMultiWindowMode() const
+{
+	return m_multiWindowMode;
+}
+
+
+void MainWindow::toggleMultiWindowMode()
+{
+	setMultiWindowMode(!m_multiWindowMode);
+}
+
+
+/**
+ * @brief Enter or exit multi-window mode.
+ *
+ * In multi-window mode, all 8 main editors are freed from the QMdiArea
+ * and shown as independent OS windows. The SideBar also becomes its own
+ * floating window. MainWindow collapses to a toolbar-only launchpad.
+ *
+ * In single-window (MDI) mode, all editors are re-embedded into the
+ * QMdiArea and MainWindow expands back to its full layout.
+ *
+ * @param enabled True to enter multi-window mode; false to return to MDI.
+ */
+void MainWindow::setMultiWindowMode(bool enabled)
+{
+	if (m_multiWindowMode == enabled) { return; }
+	m_multiWindowMode = enabled;
+
+	// Collect the 8 main editors. We handle them explicitly so that
+	// instrument windows, effect views, etc. are left untouched.
+	const QList<QWidget*> mainEditors = {
+		getGUI()->songEditor(),
+		getGUI()->patternEditor(),
+		getGUI()->pianoRoll(),
+		getGUI()->automationEditor(),
+		getGUI()->mixerView(),
+		getGUI()->getProjectNotes(),
+		getGUI()->getMicrotunerConfig(),
+		getGUI()->getControllerRackView()
+	};
+
+	if (enabled)
+	{
+		// --- Enter multi-window mode ---
+
+		// Detach each main editor SubWindow: it becomes an independent OS window
+		for (QWidget* editor : mainEditors)
+		{
+			auto* subwin = qobject_cast<SubWindow*>(editor->parentWidget());
+			if (subwin)
+			{
+				// Map the SubWindow's MDI-local position to screen coordinates
+				QPoint screenPos = m_workspace->viewport()->mapToGlobal(subwin->pos());
+				subwin->detach(screenPos);
+			}
+		}
+
+		// Detach the SideBar as its own floating OS window.
+		// Restore a saved screen position or default to a sensible location.
+		int sbX = ConfigManager::inst()->value("ui", "sideBar_mw_x").toInt();
+		int sbY = ConfigManager::inst()->value("ui", "sideBar_mw_y").toInt();
+		int sbW = ConfigManager::inst()->value("ui", "sideBar_mw_w").toInt();
+		int sbH = ConfigManager::inst()->value("ui", "sideBar_mw_h").toInt();
+		if (sbW < 1 || sbH < 1)
+		{
+			// No saved position: place it to the left of center screen
+			sbX = 10;
+			sbY = 100;
+			sbW = m_sideBar->sizeHint().width();
+			sbH = 600;
+		}
+		m_sideBar->setWindowFlags(m_sideBar->windowFlags() | Qt::Window);
+		m_sideBar->setWindowTitle(tr("LMMS Browser"));
+		m_sideBar->setGeometry(sbX, sbY, sbW, sbH);
+		m_sideBar->show();
+
+		// Collapse MainWindow to just the toolbar (launchpad mode)
+		m_workspaceContainer->hide();
+
+		ConfigManager::inst()->setValue("ui", "multiWindowMode", "1");
+	}
+	else
+	{
+		// --- Exit multi-window mode ---
+
+		// Save SideBar geometry before re-embedding
+		ConfigManager::inst()->setValue("ui", "sideBar_mw_x", QString::number(m_sideBar->x()));
+		ConfigManager::inst()->setValue("ui", "sideBar_mw_y", QString::number(m_sideBar->y()));
+		ConfigManager::inst()->setValue("ui", "sideBar_mw_w", QString::number(m_sideBar->width()));
+		ConfigManager::inst()->setValue("ui", "sideBar_mw_h", QString::number(m_sideBar->height()));
+
+		// Re-embed SideBar into the layout
+		m_sideBar->hide();
+		m_sideBar->setWindowFlags(m_sideBar->windowFlags() & ~Qt::Window);
+
+		// Re-attach all editor SubWindows back into the MDI area
+		for (QWidget* editor : mainEditors)
+		{
+			auto* subwin = qobject_cast<SubWindow*>(editor->parentWidget());
+			if (subwin) { subwin->attach(); }
+		}
+
+		// Restore the workspace container (sidebar + MDI area)
+		m_workspaceContainer->show();
+		m_sideBar->show();
+
+		ConfigManager::inst()->setValue("ui", "multiWindowMode", "0");
+	}
 }
 
 

@@ -524,17 +524,18 @@ void MixerView::keyPressEvent(QKeyEvent * e)
 
 
 void MixerView::closeEvent(QCloseEvent * ce)
- {
-	if (parentWidget())
+{
+	QWidget* parent = parentWidget();
+	if (parent && parent->isVisible())
 	{
-		parentWidget()->hide();
+		parent->hide();
 	}
 	else
 	{
 		hide();
 	}
 	ce->ignore();
- }
+}
 
 
 

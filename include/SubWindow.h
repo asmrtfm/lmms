@@ -71,6 +71,15 @@ public:
 	int titleBarHeight() const;
 	int frameWidth() const;
 
+	/// Make the inner widget an independent OS window at the given screen position.
+	/// The SubWindow wrapper is hidden. No-op if already detached.
+	void detach(QPoint screenPos);
+	/// Re-embed the inner widget into this SubWindow and restore its MDI visibility.
+	/// No-op if already attached.
+	void attach();
+	/// Return true if the widget is currently shown as an independent OS window.
+	bool isDetached() const;
+
 protected:
 	// hook the QWidget move/resize events to update the tracked geometry
 	void moveEvent( QMoveEvent * event ) override;
@@ -97,6 +106,8 @@ private:
 	QLabel * m_windowTitle;
 	QGraphicsDropShadowEffect * m_shadow;
 	bool m_hasFocus;
+	bool m_isDetached = false;   ///< True when the inner widget is shown as a Qt::Window
+	bool m_wasVisible = false;   ///< Visibility state of this SubWindow before detaching
 
 	static void elideText( QLabel *label, QString text );
 	void adjustTitleBar();

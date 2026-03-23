@@ -421,4 +421,53 @@ QPushButton* SubWindow::addTitleButton(const std::string& iconName, const QStrin
 }
 
 
+/**
+ * @brief Show the inner widget as an independent OS-level window.
+ *
+ * Adds Qt::Window to the widget's window flags (making it top-level),
+ * moves it to the given screen-absolute position, shows it, then hides
+ * this SubWindow wrapper so the MDI area sees an empty slot.
+ *
+ * @param screenPos Screen-absolute position for the detached window.
+ */
+void SubWindow::detach(QPoint screenPos)
+{
+	if (m_isDetached || !widget()) { return; }
+	m_isDetached = true;
+	m_wasVisible = !isHidden();
+
+	const QSize sz = widget()->size();
+	widget()->setWindowFlags(widget()->windowFlags() | Qt::Window);
+	widget()->move(screenPos);
+	widget()->resize(sz);
+	widget()->show();
+
+	hide(); // Hide the SubWindow wrapper; editor is now its own OS window
+}
+
+/**
+ * @brief Re-embed the inner widget into this SubWindow.
+ *
+ * Removes Qt::Window from the widget's window flags, hides it (so Qt can
+ * reparent it back into the MDI layout), then restores this SubWindow's
+ * visibility to what it was before the detach.
+ */
+void SubWindow::attach()
+{
+	if (!m_isDetached || !widget()) { return; }
+	m_isDetached = false;
+
+	widget()->hide();
+	widget()->setWindowFlags(widget()->windowFlags() & ~Qt::Window);
+
+	if (m_wasVisible) { show(); } else { hide(); }
+	adjustTitleBar();
+}
+
+bool SubWindow::isDetached() const
+{
+	return m_isDetached;
+}
+
+
 } // namespace lmms::gui

@@ -26,6 +26,7 @@
 
 #include <QCoreApplication>
 #include <QProgressDialog>
+#include <QSet>
 #include <QDomElement>
 #include <QWriteLocker>
 
@@ -283,6 +284,10 @@ AutomatedValueMap TrackContainer::automatedValuesFromTracks(const TrackList &tra
 	}
 
 	AutomatedValueMap valueMap;
+	// Track which models have explicit Song-level automation so that
+	// pattern-store automation (from hidden automation tracks) does not
+	// override them. Song-level automation takes precedence.
+	QSet<AutomatableModel*> songAutomatedModels;
 
 	Q_ASSERT(std::is_sorted(clips.begin(), clips.end(), Clip::comparePosition));
 
@@ -306,6 +311,7 @@ AutomatedValueMap TrackContainer::automatedValuesFromTracks(const TrackList &tra
 			for (AutomatableModel* model : p->objects())
 			{
 				valueMap[model] = value;
+				songAutomatedModels.insert(model);
 			}
 		}
 		else if (auto* pattern = dynamic_cast<PatternClip*>(clip))
@@ -320,8 +326,13 @@ AutomatedValueMap TrackContainer::automatedValuesFromTracks(const TrackList &tra
 			auto patValues = patStore->automatedValuesAt(patTime, patIndex);
 			for (auto it=patValues.begin(); it != patValues.end(); it++)
 			{
-				// override old values, pattern track with the highest index takes precedence
-				valueMap[it.key()] = it.value();
+				// Pattern-store automation fills in values for models not
+				// already covered by Song-level automation. Song-level
+				// automation takes precedence over pattern-store defaults.
+				if (!songAutomatedModels.contains(it.key()))
+				{
+					valueMap[it.key()] = it.value();
+				}
 			}
 		}
 		else

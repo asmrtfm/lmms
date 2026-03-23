@@ -647,11 +647,11 @@ void MainWindow::finalize()
 	m_toolBarLayout->addWidget( controllers_window, 1, 6 );
 	m_toolBarLayout->addWidget( project_notes_window, 1, 7 );
 
-	// Multi-window mode toggle (Ctrl+M)
+	// Multi-window mode toggle (Ctrl+Shift+M)
 	auto multi_window_btn = new ToolButton(embed::getIconPixmap("maximize"),
-		tr("Toggle multi-window mode") + " (Ctrl+M)", this,
+		tr("Toggle multi-window mode") + " (Ctrl+Shift+M)", this,
 		SLOT(toggleMultiWindowMode()), m_toolBar);
-	multi_window_btn->setShortcut(Qt::CTRL + Qt::Key_M);
+	multi_window_btn->setShortcut(Qt::CTRL + Qt::SHIFT + Qt::Key_M);
 	multi_window_btn->setCheckable(true);
 	m_toolBarLayout->addWidget(multi_window_btn, 1, 8);
 

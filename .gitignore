@@ -11,3 +11,9 @@
 /data/locale/*.qm
 Brewfile.lock.json
 /music
+
+# Personal project files and runtime artifacts
+noctilux.lmms-db
+noctilux.lmms-db-shm
+noctilux.lmms-db-wal
+MusicGen/

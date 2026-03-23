@@ -122,9 +122,14 @@ void PatternClipView::copySelectionToNewPatternTrack()
 
 	for (const auto& patternTrack : ownerTracks)
 	{
+		int ownerPatternTrackIndex = static_cast<PatternTrack*>(patternTrack->getTrack())->patternIndex();
+		// Use the shared pattern length (max across all InstrumentTracks) as the
+		// repetition period — this matches how the audio engine loops patterns.
+		tick_t patternLength = Engine::patternStore()->lengthOfPattern(ownerPatternTrackIndex)
+			* TimePos::ticksPerBar();
+
 		for (const auto& track : Engine::patternStore()->tracks())
 		{
-			int ownerPatternTrackIndex = static_cast<PatternTrack*>(patternTrack->getTrack())->patternIndex();
 			Clip* clip = track->getClip(ownerPatternTrackIndex);
 			auto sClip = dynamic_cast<SampleClip*>(clip);
 			auto mClip = dynamic_cast<MidiClip*>(clip);
@@ -132,22 +137,23 @@ void PatternClipView::copySelectionToNewPatternTrack()
 			Clip* newClip = track->getClip(newPatternTrackIndex);
 			if (sClip)
 			{
-				// Copy full clip state (sample path, settings, etc.)
+				// TODO
 				Clip::copyStateTo(clip, newClip);
-				// Unmute destination -- copyStateTo propagates mute from source
-				if (newClip->isMuted()) { newClip->toggleMute(); }
 			}
 			else if (mClip)
 			{
 				MidiClip* newMidiClip = dynamic_cast<MidiClip*>(newClip);
+				// BeatClips loop at their own length (step grid repeats).
+				// MelodyClips loop at the shared pattern length.
+				tick_t repeatPeriod = (mClip->type() == MidiClip::Type::BeatClip)
+					? static_cast<tick_t>(mClip->length()) : patternLength;
+
 				for (auto clipv: clipvs)
 				{
 					if (clipv->getTrackView() != patternTrack) { continue; }
-					// Figure out how many times this clip repeats itself. At maximum it could touch (length roudned up + 1) bars
-					// when accounting for the fact that the start offset could make it play the end of a bar before starting the first full bar.
-					// Here we go the safe way and iterate through the maximum possible repetitions, and discard any notes outside of the range.
-					// First +1 for ceiling, second +1 for possible previous bar.
-					int maxPossibleRepetitions = clipv->getClip()->length() / mClip->length() + 1 + 1; 
+					// Calculate max repetitions using the appropriate period.
+					// +2 for ceiling and offset overlap.
+					int maxPossibleRepetitions = clipv->getClip()->length() / repeatPeriod + 1 + 1;
 
 					TimePos clipRelativePos = clipv->getClip()->startPosition() - firstClipStartPos;
 					TimePos startTimeOffset = clipv->getClip()->startTimeOffset();
@@ -159,9 +165,9 @@ void PatternClipView::copySelectionToNewPatternTrack()
 						{
 							auto newNote = Note{*note};
 
-							TimePos newNotePos = note->pos() + clipRelativePos + startTimeOffset + i * mClip->length().nextFullBar() * TimePos::ticksPerBar();
-							TimePos newNotePosRelativeToClip = note->pos() + startTimeOffset + i * mClip->length().nextFullBar()  * TimePos::ticksPerBar();
-							
+							TimePos newNotePos = note->pos() + clipRelativePos + startTimeOffset + i * repeatPeriod;
+							TimePos newNotePosRelativeToClip = note->pos() + startTimeOffset + i * repeatPeriod;
+
 							if (newNotePosRelativeToClip < 0 || newNotePosRelativeToClip >= clipv->getClip()->length()) { continue; }
 
 							newNote.setPos(newNotePos);
@@ -181,31 +187,27 @@ void PatternClipView::copySelectionToNewPatternTrack()
 			}
 			else if (aClip)
 			{
-				// Copy full clip state (automation nodes, connections, etc.)
+				// TODO
 				Clip::copyStateTo(clip, newClip);
-				// Unmute destination -- copyStateTo propagates mute from source
-				if (newClip->isMuted()) { newClip->toggleMute(); }
 			}
 		}
 	}
-	// Update clip lengths for all tracks at the new pattern index.
-	// addSteps() only applies to BeatClips; MelodyClips use updateLength().
-	const int targetBars = maxNotePos.nextFullBar();
+	// Finalize clip lengths for the new pattern. BeatClips need step count
+	// extension; MelodyClips just need updateLength() to recalculate from notes.
 	for (const auto& track : Engine::patternStore()->tracks())
 	{
 		auto* mc = dynamic_cast<MidiClip*>(track->getClip(newPatternTrackIndex));
 		if (!mc) { continue; }
 		if (mc->type() == MidiClip::Type::BeatClip)
 		{
-			// Extend beat steps until the clip covers the target bar count
-			while (mc->length() < targetBars * TimePos::ticksPerBar())
+			const tick_t targetLength = maxNotePos.nextFullBar() * TimePos::ticksPerBar();
+			while (mc->length() < targetLength)
 			{
 				mc->addSteps();
 			}
 		}
 		else
 		{
-			// MelodyClip -- notes were added via addNote(), just finalize length
 			mc->updateLength();
 		}
 	}

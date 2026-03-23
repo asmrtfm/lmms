@@ -2350,8 +2350,7 @@ void AutomationEditorWindow::dragEnterEvent( QDragEnterEvent *_dee )
 void AutomationEditorWindow::open(AutomationClip* clip)
 {
 	setCurrentClip(clip);
-	parentWidget()->show();
-	show();
+	getGUI()->mainWindow()->toggleAutomationEditorWin(true); // forceShow — respects multi-window mode
 	setFocus();
 }
 

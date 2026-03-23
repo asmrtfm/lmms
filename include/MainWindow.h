@@ -214,7 +214,7 @@ public slots:
 	/// Open the LMMS documentation in the default web browser
 	void help();
 	/// Toggle visibility of the Automation Editor window
-	void toggleAutomationEditorWin();
+	void toggleAutomationEditorWin(bool forceShow = false);
 	/// Toggle visibility of the Pattern Editor window (forceShow=true to always show)
 	void togglePatternEditorWin(bool forceShow = false);
 	/// Toggle visibility of the Song Editor window

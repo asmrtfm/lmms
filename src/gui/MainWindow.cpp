@@ -1618,9 +1618,9 @@ void MainWindow::togglePianoRollWin(bool forceShow)
 /**
  * @brief Slot: Toggles visibility of the Automation Editor sub-window.
  */
-void MainWindow::toggleAutomationEditorWin()
+void MainWindow::toggleAutomationEditorWin(bool forceShow)
 {
-	toggleWindow( getGUI()->automationEditor() );
+	toggleWindow( getGUI()->automationEditor(), forceShow );
 }
 
 

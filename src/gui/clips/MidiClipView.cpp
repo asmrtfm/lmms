@@ -201,10 +201,9 @@ void MidiClipView::setGhostInPianoRoll()
 void MidiClipView::setGhostInAutomationEditor()
 {
 	auto aEditor = getGUI()->automationEditor(); // Get the singleton automation editor widget
-	aEditor->setGhostMidiClip(m_clip);           // Register this clip as the ghost note source
-	aEditor->parentWidget()->show();              // Show the automation editor's parent container
-	aEditor->show();                              // Ensure the automation editor widget is visible
-	aEditor->setFocus();                          // Give keyboard focus to the automation editor
+	aEditor->setGhostMidiClip(m_clip);                         // Register this clip as the ghost note source
+	getGUI()->mainWindow()->toggleAutomationEditorWin(true);   // forceShow — respects multi-window mode
+	aEditor->setFocus();
 }
 
 /**

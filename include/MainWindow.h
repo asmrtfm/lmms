@@ -226,7 +226,7 @@ public slots:
 	/// Toggle visibility of the Mixer (FX mixer) window
 	void toggleMixerWin();
 	/// Toggle visibility of the Piano Roll window
-	void togglePianoRollWin();
+	void togglePianoRollWin(bool forceShow = false);
 	/// Toggle visibility of the Controller Rack window
 	void toggleControllerRack();
 	/// Toggle fullscreen mode for the main window

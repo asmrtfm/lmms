@@ -1607,9 +1607,9 @@ void MainWindow::toggleProjectNotesWin()
 /**
  * @brief Slot: Toggles visibility of the Piano Roll sub-window.
  */
-void MainWindow::togglePianoRollWin()
+void MainWindow::togglePianoRollWin(bool forceShow)
 {
-	toggleWindow( getGUI()->pianoRoll() );
+	toggleWindow( getGUI()->pianoRoll(), forceShow );
 }
 
 

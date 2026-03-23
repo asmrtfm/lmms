@@ -54,6 +54,7 @@
 #include "ConfigManager.h"
 #include "DeprecationHelper.h"
 #include "GuiApplication.h"
+#include "MainWindow.h"
 #include "MidiClip.h"
 #include "PianoRoll.h"
 #include "RenameDialog.h"
@@ -167,10 +168,9 @@ void MidiClipView::update()
 void MidiClipView::openInPianoRoll()
 {
 	auto pRoll = getGUI()->pianoRoll();  // Get the singleton piano roll widget
-	pRoll->setCurrentMidiClip(m_clip);   // Set this clip as the one being edited
-	pRoll->parentWidget()->show();       // Show the piano roll's parent container (subwindow)
-	pRoll->show();                       // Ensure the piano roll widget itself is visible
-	pRoll->setFocus();                   // Give keyboard focus to the piano roll
+	pRoll->setCurrentMidiClip(m_clip);           // Set this clip as the one being edited
+	getGUI()->mainWindow()->togglePianoRollWin(true); // forceShow — respects multi-window mode
+	pRoll->setFocus();
 }
 
 
@@ -186,10 +186,9 @@ void MidiClipView::openInPianoRoll()
 void MidiClipView::setGhostInPianoRoll()
 {
 	auto pRoll = getGUI()->pianoRoll();  // Get the singleton piano roll widget
-	pRoll->setGhostMidiClip(m_clip);    // Register this clip as the ghost note source
-	pRoll->parentWidget()->show();       // Show the piano roll's parent container
-	pRoll->show();                       // Ensure the piano roll widget itself is visible
-	pRoll->setFocus();                   // Give keyboard focus to the piano roll
+	pRoll->setGhostMidiClip(m_clip);              // Register this clip as the ghost note source
+	getGUI()->mainWindow()->togglePianoRollWin(true); // forceShow — respects multi-window mode
+	pRoll->setFocus();
 }
 
 /**

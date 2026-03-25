@@ -752,6 +752,14 @@ bool InstrumentTrack::play( const TimePos & _start, const fpp_t _frames,
 		{
 			cur_start -= c->startPosition();
 		}
+		else if (c->type() == MidiClip::Type::BeatClip && c->length() > 0)
+		{
+			// PatternStore::play() wraps start to the shared pattern length, but
+			// BeatClips repeat at their own (shorter) step-grid length. Wrap
+			// cur_start into the clip's own length so beat steps loop correctly
+			// when the pattern is longer than a single beat grid.
+			cur_start = cur_start % c->length();
+		}
 
 		// get all notes from the given clip...
 		const NoteVector & notes = c->notes();
